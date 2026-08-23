@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
-name = "development"
+name = "css-parser-cli"
+version = "0.1.0"
+dependencies = [
+ "css-parser-core",
+]
+
+[[package]]
+name = "css-parser-core"
 version = "0.1.0"

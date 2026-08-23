@@ -1,11 +1,11 @@
 [package]
-name = "development"
+name = "css-parser-core"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "A generic, syntax-oriented CSS parser written in Rust"
 repository = "https://github.com/HazelDaniel/css-parser"
-readme = "../README.md"
+readme = "../../README.md"
 keywords = ["css", "parser", "compiler", "syntax"]
 categories = ["parser-implementations", "web-programming"]
 
