@@ -1,14 +1,19 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+use std::collections::HashMap;
+use crate::errors::{LexerErrorReason, LEX_ERROR_MAP};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod token;
+pub mod lexer;
+pub mod errors;
+pub mod types;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+fn main() {
+    LEX_ERROR_MAP.get_or_init(|| {
+        HashMap::from([
+            (LexerErrorReason::INVALID_TOKEN, "invalid token"),
+            (LexerErrorReason::UNTERMINATED_TOKEN, "unterminated token"),
+            (LexerErrorReason::EOF, "unexpected end of file"),
+        ])
+    });
+    
+    println!("Hello, From Core");
 }
