@@ -1,3 +1,3 @@
 fn main() {
-    println!("Hello, CLI");
+    println!("Hello, from CLI!");
 }
