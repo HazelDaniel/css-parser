@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use crate::errors::{LexerErrorReason, LEX_ERROR_MAP};
+use std::collections::HashMap;
 
-pub mod token;
-pub mod lexer;
 pub mod errors;
+pub mod lexer;
+pub mod token;
 pub mod types;
 
 fn main() {
@@ -15,6 +15,6 @@ fn main() {
             (LexerErrorReason::EOF, "unexpected end of file"),
         ])
     });
-    
+
     println!("Hello, From Core");
 }
