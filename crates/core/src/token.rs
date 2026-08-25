@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 pub trait Object {}
 
+#[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum TokenKind {
@@ -30,6 +31,7 @@ pub enum TokenKind {
     EOF,
 }
 
+#[rustfmt::skip]
 pub struct Token<'a> {
     pub kind:               TokenKind,
     pub line:               usize,
@@ -37,13 +39,9 @@ pub struct Token<'a> {
     pub literal:            Option<Box<dyn Object>>
 }
 
+#[rustfmt::skip]
 impl<'a> Token<'a> {
     pub fn new(kind: TokenKind, line: usize, lexeme: Cow<'a, str>) -> Self {
-        Self {
-            kind,
-            line,
-            lexeme,
-            literal: None
-        }
+        Self { kind, line, lexeme, literal: None }
     }
 }

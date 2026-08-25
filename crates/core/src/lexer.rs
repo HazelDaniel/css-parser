@@ -3,6 +3,7 @@ use crate::errors::{LexerError, LexerErrorReason};
 use crate::lexer::utils::is_css_printable;
 use crate::token::{Token, TokenKind};
 
+#[rustfmt::skip]
 struct Lexer<'a> {
     input:              &'a str,
     start:              usize,
@@ -15,6 +16,7 @@ struct Lexer<'a> {
 }
 
 impl <'a> Lexer<'a> {
+    #[rustfmt::skip]
     fn new(input: &'a str) -> Self {
         Self { input, start: 0, line: 1, current: 0, tokens: Vec::new(), last_size_memo: Vec::new() }
     }
@@ -65,10 +67,12 @@ impl <'a> Lexer<'a> {
         &self.tokens[..]
     }
 
+    #[rustfmt::skip]
     fn add_token(&mut self, token: Token<'a>) {
         self.tokens.push(token);
     }
 
+    #[rustfmt::skip]
     fn run(&mut self) -> Result<(), LexerError> {
         // TODO: diagnostic consumers should only be used at the top level
         // they then can delegate to recognizing consumers

@@ -6,6 +6,7 @@ use crate::types::{LocalError};
 
 pub static LEX_ERROR_MAP: OnceLock<HashMap<LexerErrorReason, &'static str>> = OnceLock::new();
 
+#[rustfmt::skip]
 #[allow(non_camel_case_types)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum LexerErrorReason {
@@ -14,6 +15,7 @@ pub enum LexerErrorReason {
     INVARIANT_VIOLATION, // for internal bugs during testing
 }
 
+#[rustfmt::skip]
 pub struct LexerError<'a> {
     pub line:               usize,
     pub reason:             LexerErrorReason,
@@ -31,6 +33,7 @@ impl<'a> LocalError for LexerError<'a> {
 }
 
 impl<'a> LexerError<'a> {
+    #[rustfmt::skip]
     pub fn new(reason: LexerErrorReason, line: usize, lexeme: Cow<'a, str>) -> Self {
         Self { reason, line, lexeme }
     }
