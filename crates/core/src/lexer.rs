@@ -146,6 +146,20 @@ impl<'a> Lexer<'a> {
                     '\\' => {
                         self.escape(true)?;
                     },
+                    '@' => {
+                        match self.at_keyword(true) {
+                            Ok(()) => return Ok(()),
+                            Err(e) if e.reason == LexerErrorReason::MATCHED_PREFIX => {
+                                self.add_token(Token::new(
+                                    TokenKind::DELIM('@'),
+                                    self.line,
+                                    Cow::Borrowed(""),
+                                ));
+                                return Ok(());
+                            },
+                            Err(e) => return Err(e),
+                        }
+                    },
                     identifier => {
                         if self.input[self.current..].starts_with("<!--") {
                             self.current += 3;
@@ -319,6 +333,37 @@ impl<'a> Lexer<'a> {
         if collect {
             self.add_token(Token::new(
                 TokenKind::FUNCTION,
+                self.line,
+                Cow::Borrowed(""),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn at_keyword(&mut self, collect: bool) -> Result<(), LexerError> {
+        if !self.catch_match('@') {
+            return Err(LexerError::new(
+                LexerErrorReason::NO_MATCH,
+                self.line,
+                LexerSpan(self.start, self.current),
+            ));
+        }
+
+        if !self.at_ident_start() {
+            self.step_back();
+            return Err(LexerError::new(
+                LexerErrorReason::MATCHED_PREFIX,
+                self.line,
+                LexerSpan(self.start, self.current),
+            ));
+        }
+
+        self.ident(false)?;
+
+        if collect {
+            self.add_token(Token::new(
+                TokenKind::AT_KEYWORD,
                 self.line,
                 Cow::Borrowed(""),
             ));
@@ -1208,6 +1253,35 @@ mod tests {
         let mut lexer = Lexer::new("calc ");
 
         let result = lexer.function(false);
+        assert!(matches!(
+            result,
+            Err(LexerError {
+                reason: LexerErrorReason::MATCHED_PREFIX,
+                ..
+            })
+        ));
+        assert_eq!(lexer.current, 0);
+        assert!(lexer.last_size_memo.is_empty());
+    }
+
+    #[test]
+    fn at_keyword_consumer_stops_on_the_last_identifier_code_point() {
+        let mut lexer = Lexer::new("@media{");
+
+        assert!(lexer.at_keyword(true).is_ok());
+        assert_eq!(lexer.peek(), Some('a'));
+        assert_eq!(lexer.tokens.len(), 1);
+        assert_eq!(lexer.tokens[0].kind, TokenKind::AT_KEYWORD);
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('{'));
+    }
+
+    #[test]
+    fn at_keyword_consumer_restores_state_when_identifier_does_not_follow() {
+        let mut lexer = Lexer::new("@ ");
+
+        let result = lexer.at_keyword(false);
         assert!(matches!(
             result,
             Err(LexerError {
