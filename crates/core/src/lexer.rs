@@ -137,8 +137,20 @@ impl<'a> Lexer<'a> {
                         }
                         self.add_token(Token::new(TokenKind::SLASH, self.line, Cow::Borrowed("/")));
                     },
-                    '+' => {
-                        self.number(true)?;
+                    '+' | '.' => {
+                        let delimiter = cmp;
+                        match self.number(true) {
+                            Ok(()) => return Ok(()),
+                            Err(e) if e.reason == LexerErrorReason::MATCHED_PREFIX => {
+                                self.add_token(Token::new(
+                                    TokenKind::DELIM(delimiter),
+                                    self.line,
+                                    Cow::Borrowed(""),
+                                ));
+                                return Ok(());
+                            }
+                            Err(e) => return Err(e),
+                        }
                     },
                     d if d.is_ascii_digit() => {
                         self.number(true)?;
@@ -202,8 +214,18 @@ impl<'a> Lexer<'a> {
                         }
 
                         if identifier == '-' {
-                            self.number(true)?;
-                            return Ok(())
+                            match self.number(true) {
+                                Ok(()) => return Ok(()),
+                                Err(e) if e.reason == LexerErrorReason::MATCHED_PREFIX => {
+                                    self.add_token(Token::new(
+                                        TokenKind::DELIM('-'),
+                                        self.line,
+                                        Cow::Borrowed(""),
+                                    ));
+                                    return Ok(());
+                                }
+                                Err(e) => return Err(e),
+                            }
                         }
 
                         if self.input[self.current..].starts_with("!important") {
@@ -460,106 +482,70 @@ impl<'a> Lexer<'a> {
     }
 
     fn number(&mut self, collect: bool) -> Result<(), LexerError> {
-        let mut should_align = false;
+        let branch_point = self.current;
+        let memo_point = self.last_size_memo.len();
 
-        if self.catch_match('+') || self.catch_match('-') {
-            should_align = true;
+        if matches!(self.peek(), Some('+' | '-')) {
+            self.advance();
         }
 
-        match self.peek() {
-            Some(m) if m == '.' => {
+        let starts_fraction = self.peek() == Some('.')
+            && matches!(self.peek_n(1), Some(c) if c.is_ascii_digit());
+
+        if starts_fraction {
+            self.advance();
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
                 self.advance();
-                if let Some(curr) = self.peek() {
-                    if curr.is_ascii_digit() {
-                        self.advance();
-                        self.digit(false);
-                        should_align = true;
-                    } else {
-                        return Err(LexerError::new(
-                            LexerErrorReason::UNTERMINATED_TOKEN,
-                            self.line,
-                            LexerSpan (self.start, self.current),
-                        ));
-                    }
+            }
+        } else if matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                self.advance();
+            }
+
+            if self.peek() == Some('.')
+                && matches!(self.peek_n(1), Some(c) if c.is_ascii_digit())
+            {
+                self.advance();
+                while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                    self.advance();
                 }
             }
-            Some(d) => {
-                if let Some(curr) = self.peek() {
-                    if curr.is_ascii_digit() {
-                        self.advance();
-                        self.digit(false);
-                        should_align = true;
-                    } else {
-                        if should_align {
-                            self.step_back();
-                        }
+        } else {
+            self.backtrack(branch_point, memo_point);
+            return Err(LexerError::new(
+                LexerErrorReason::MATCHED_PREFIX,
+                self.line,
+                LexerSpan(self.start, self.current),
+            ));
+        }
 
-                        return Err(LexerError::new(
-                            LexerErrorReason::UNTERMINATED_TOKEN,
-                            self.line,
-                            LexerSpan (self.start, self.current),
-                        ));
-                    }
-                }
+        let exponent = matches!(self.peek(), Some('e' | 'E'))
+            && (matches!(self.peek_n(1), Some(c) if c.is_ascii_digit())
+                || (matches!(self.peek_n(1), Some('+' | '-'))
+                    && matches!(self.peek_n(2), Some(c) if c.is_ascii_digit())));
 
-                match self.peek() {
-                    Some(x) if x == '.' => {
-                        self.advance();
-                        self.digit(false);
-                        should_align = true;
-                    }
-                    _ => {}
-                }
-
-                if self.catch_match('e') || self.catch_match('E') {
-                    should_align = true;
-
-                    if !self.catch_match('-') { self.catch_match('+'); }
-
-                    if let Some(curr) = self.peek() {
-                        if curr.is_ascii_digit() {
-                            self.advance();
-                            self.digit(false);
-                            should_align = true;
-                        } else {
-                            self.step_back();
-
-                            return Err(LexerError::new(
-                                LexerErrorReason::UNTERMINATED_TOKEN,
-                                self.line,
-                                LexerSpan (self.start, self.current),
-                            ));
-                        }
-                    } else {
-                        self.step_back();
-
-                        return Err(LexerError::new(
-                            LexerErrorReason::UNTERMINATED_TOKEN,
-                            self.line,
-                            LexerSpan (self.start, self.current),
-                        ));
-                    }
-                }
+        if exponent {
+            self.advance();
+            if matches!(self.peek(), Some('+' | '-')) {
+                self.advance();
             }
-            None => {
-                if should_align {
-                    self.step_back();
-                }
-
-                return Err(LexerError::new(
-                    LexerErrorReason::UNTERMINATED_TOKEN,
-                    self.line,
-                    LexerSpan (self.start, self.current),
-                ));
+            while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
+                self.advance();
             }
+        }
+
+        let kind = if self.peek() == Some('%') {
+            TokenKind::PERCENTAGE
+        } else if self.at_ident_start() {
+            self.ident(false)?;
+            TokenKind::DIMENSION
+        } else {
+            self.step_back();
+            TokenKind::NUMBER
         };
 
-        if should_align {
-            self.step_back();
-
-            if collect {
-                self.add_token(Token::new(TokenKind::NUMBER, self.line, Cow::Borrowed("")));
-            }
+        if collect {
+            self.add_token(Token::new(kind, self.line, Cow::Borrowed("")));
         }
 
         Ok(())
@@ -752,7 +738,10 @@ impl<'a> Lexer<'a> {
                 }
 
                 match self.escape(false) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        self.advance();
+                        should_align = true;
+                    }
                     Err(e) if e.reason == LexerErrorReason::NO_MATCH => {}
                     _ => {
                         // TODO: handle cursor reset
@@ -790,7 +779,10 @@ impl<'a> Lexer<'a> {
                     }
 
                     match self.escape(false) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            self.advance();
+                            should_align = true;
+                        }
                         Err(e) if e.reason == LexerErrorReason::NO_MATCH => {}
                         _ => {
                             // TODO: handle cursor reset
@@ -800,8 +792,8 @@ impl<'a> Lexer<'a> {
                 _ => {
                     if should_align {
                         self.step_back();
-                        break;
                     }
+                    break;
                 }
             }
         }
@@ -1208,6 +1200,128 @@ mod tests {
         assert_eq!(lexer.peek(), Some('3'));
         lexer.advance();
         assert_eq!(lexer.peek(), Some('x'));
+    }
+
+    #[test]
+    fn number_consumer_classifies_percentage_and_preserves_cursor() {
+        let mut lexer = Lexer::new("10%x");
+
+        assert!(lexer.number(true).is_ok());
+        assert_eq!(lexer.peek(), Some('%'));
+        assert_eq!(lexer.tokens[0].kind, TokenKind::PERCENTAGE);
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('x'));
+    }
+
+    #[test]
+    fn number_consumer_classifies_dimension_and_preserves_cursor() {
+        let mut lexer = Lexer::new("1.5rem;");
+
+        assert!(lexer.number(true).is_ok());
+        assert_eq!(lexer.peek(), Some('m'));
+        assert_eq!(lexer.tokens[0].kind, TokenKind::DIMENSION);
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some(';'));
+    }
+
+    #[test]
+    fn number_consumer_restores_state_for_a_non_number_prefix() {
+        let mut lexer = Lexer::new("+");
+
+        let result = lexer.number(false);
+        assert!(matches!(
+            result,
+            Err(LexerError {
+                reason: LexerErrorReason::MATCHED_PREFIX,
+                ..
+            })
+        ));
+        assert_eq!(lexer.current, 0);
+        assert!(lexer.last_size_memo.is_empty());
+    }
+
+    #[test]
+    fn number_consumer_handles_css_number_forms() {
+        let cases = [
+            ("0", TokenKind::NUMBER, '0'),
+            ("+1", TokenKind::NUMBER, '1'),
+            ("-1", TokenKind::NUMBER, '1'),
+            (".5", TokenKind::NUMBER, '5'),
+            ("+.5", TokenKind::NUMBER, '5'),
+            ("-.5", TokenKind::NUMBER, '5'),
+            ("1.25", TokenKind::NUMBER, '5'),
+            ("1e3", TokenKind::NUMBER, '3'),
+            ("1E+3", TokenKind::NUMBER, '3'),
+            ("1e-3", TokenKind::NUMBER, '3'),
+            ("10%", TokenKind::PERCENTAGE, '%'),
+            ("2px", TokenKind::DIMENSION, 'x'),
+            ("1e3ms", TokenKind::DIMENSION, 's'),
+            ("1é", TokenKind::DIMENSION, 'é'),
+            ("1\\70 x", TokenKind::DIMENSION, 'x'),
+        ];
+
+        for (input, expected_kind, expected_last) in cases {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.number(true).is_ok(), "input: {input}");
+            assert_eq!(lexer.tokens[0].kind, expected_kind, "input: {input}");
+            assert_eq!(lexer.peek(), Some(expected_last), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn number_consumer_leaves_non_numeric_suffixes_for_later_tokens() {
+        let cases: [(&str, char, Option<char>); 7] = [
+            ("1.", '1', Some('.')),
+            ("1.2.3", '2', Some('.')),
+            ("1e", 'e', None),
+            ("1e+", 'e', Some('+')),
+            ("1e-", '-', None),
+            ("1e+foo", 'e', Some('+')),
+            ("10%%", '%', Some('%')),
+        ];
+
+        for (input, expected_last, expected_next) in cases {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.number(true).is_ok(), "input: {input}");
+            assert_eq!(lexer.peek(), Some(expected_last), "input: {input}");
+
+            lexer.advance();
+            assert_eq!(lexer.peek(), expected_next, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn plain_number_aligns_before_a_following_delimiter() {
+        let mut lexer = Lexer::new("42)");
+
+        assert!(lexer.number(true).is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::NUMBER);
+        assert_eq!(lexer.peek(), Some('2'));
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some(')'));
+    }
+
+    #[test]
+    fn number_consumer_rejects_non_number_starts_without_consumption() {
+        for input in ["", "+", "-", ".", "+.", "-.", "--1", "+foo"] {
+            let mut lexer = Lexer::new(input);
+
+            let result = lexer.number(false);
+            assert!(matches!(
+                result,
+                Err(LexerError {
+                    reason: LexerErrorReason::MATCHED_PREFIX,
+                    ..
+                })
+            ), "input: {input}");
+            assert_eq!(lexer.current, 0, "input: {input}");
+            assert!(lexer.last_size_memo.is_empty(), "input: {input}");
+        }
     }
 
     #[test]
