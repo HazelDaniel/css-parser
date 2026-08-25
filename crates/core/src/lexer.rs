@@ -1,5 +1,5 @@
 use crate::errors::{LexerError, LexerErrorReason};
-use crate::lexer::utils::is_css_printable;
+use crate::types::{LexerSpan};
 use crate::token::{Token, TokenKind};
 use std::borrow::Cow;
 
@@ -27,11 +27,40 @@ impl<'a> Lexer<'a> {
 
     fn at_end(&self) -> bool {
         let x = self.input[self.current..].chars().next();
-        if let Some(_) = x {
+        if x.is_some() {
             return false;
         }
 
         true
+    }
+
+    fn at_ident_start(&self) -> bool {
+        use utils::{ is_ident_start };
+
+        let a = self.peek();
+        let b = self.peek_n(1);
+
+        match a {
+            Some(c) if is_ident_start(c) => true,
+
+            Some('-') => {
+                match b {
+                    Some('-') => true,
+                    Some(c) if is_ident_start(c) => true,
+                    Some('\\') => {
+                        let c = self.peek_n(2);
+                        matches!(c, Some(x) if !self.is_newline(x))
+                    }
+                    _ => false,
+                }
+            }
+
+            Some('\\') => {
+                matches!(b, Some(x) if !self.is_newline(x))
+            }
+
+            _ => false,
+        }
     }
 
     fn at_valid_escape(&self) -> bool {
@@ -83,11 +112,11 @@ impl<'a> Lexer<'a> {
         self.start = self.current;
         // invariant: all advances in this function eventually stop at the end of a valid lexeme (or errors)
         match self.peek() {
-            None =>  { return Err(LexerError::new(LexerErrorReason::INVARIANT_VIOLATION, self.line, Cow::Borrowed(""))); },
+            None =>  { return Err(LexerError::new(LexerErrorReason::INVARIANT_VIOLATION, self.line, LexerSpan (self.start, self.current))); },
             Some(cmp) => {
                 match cmp {
                     x if x.is_whitespace() => { self.whitespace(true)?; },
-                    ('"' | '\'') => { self.string(true)?; },
+                    '"' | '\'' => { self.string(true)?; },
                     '{' => { self.add_token(Token::new(TokenKind::CURLY_OPEN, self.line, Cow::Borrowed("{"))); },
                     '}' => { self.add_token(Token::new(TokenKind::CURLY_CLOSE, self.line, Cow::Borrowed("}"))); },
                     '[' => { self.add_token(Token::new(TokenKind::BRACKET_OPEN, self.line, Cow::Borrowed("["))); },
@@ -95,10 +124,11 @@ impl<'a> Lexer<'a> {
                     '(' => { self.add_token(Token::new(TokenKind::PAREN_OPEN, self.line, Cow::Borrowed("("))); },
                     ')' => { self.add_token(Token::new(TokenKind::PAREN_CLOSE, self.line, Cow::Borrowed(")"))); },
                     ';' => { self.add_token(Token::new(TokenKind::SEMICOLON, self.line, Cow::Borrowed(";"))); },
+                    ':' => { self.add_token(Token::new(TokenKind::COLON, self.line, Cow::Borrowed(":"))); },
                     ',' => { self.add_token(Token::new(TokenKind::COMMA, self.line, Cow::Borrowed(","))); },
                     '/' => {
                         if let Some(cmp) = self.peek_next('/') {
-                            if (cmp == '*')  {
+                            if cmp == '*'  {
                                 self.comment()?;
                                 return Ok(());
                             } else {
@@ -110,20 +140,32 @@ impl<'a> Lexer<'a> {
                     '+' => {
                         self.number(true)?;
                     },
-                    d if d.is_digit(10) => {
+                    d if d.is_ascii_digit() => {
                         self.number(true)?;
                     },
                     '\\' => {
                         self.escape(true)?;
                     },
                     identifier => {
+                        if self.input[self.current..].starts_with("<!--") {
+                            self.current += 3;
+                            self.add_token(Token::new(TokenKind::CDO, self.line, Cow::Borrowed("<!--")));
+                            return Ok(());
+                        }
+
+                        if self.input[self.current..].starts_with("-->") {
+                            self.current += 3;
+                            self.add_token(Token::new(TokenKind::CDO, self.line, Cow::Borrowed("-->")));
+                            return Ok(());
+                        }
+
                         if self.input[self.current..].starts_with("url") {
-                            self.current += (3);
+                            self.current += 3;
                             match self.url(true) {
                                 Ok(res) => { return Ok(res)},
                                 Err(_) => {
                                     // TODO: backtracking should sync internal state
-                                    self.current -= (3);
+                                    self.current -= 3;
                                 }
                             }
 
@@ -131,20 +173,35 @@ impl<'a> Lexer<'a> {
                         }
 
                         if self.input[self.current..].starts_with("--") {
-                            self.ident(true)?;
-                            return Ok(());
-                        }
-
-                        if self.input[self.current..].starts_with("!important") {
-                            self.current += (9);
-                            self.add_token(Token::new(TokenKind::IMPORTANT_TOKEN, self.line, Cow::Borrowed("!important")));
-                            return Ok(());
+                            match self.function(true) {
+                                Ok(res) => { return Ok(res)},
+                                _ => {
+                                    self.ident(true)?;
+                                    return Ok(());
+                                }
+                            };
                         }
 
                         if identifier == '-' {
                             self.number(true)?;
                             return Ok(())
                         }
+
+                        if self.input[self.current..].starts_with("!important") {
+                            self.current += 9;
+                            self.add_token(Token::new(TokenKind::IMPORTANT_TOKEN, self.line, Cow::Borrowed("!important")));
+                            return Ok(());
+                        }
+
+                        if identifier == '#' {
+                            match self.hash(true) {
+                                Ok(()) => { return Ok(()); },
+                                Err(_) => {
+                                    self.add_token(Token::new(TokenKind::DELIM('#'), self.line, Cow::Borrowed("")));
+                                }
+                            };
+                        }
+
                     }
                 }
             }
@@ -176,6 +233,25 @@ impl<'a> Lexer<'a> {
         self.input[self.current..].chars().next()
     }
 
+    fn peek_next(&self, pop: char) -> Option<char> {
+        self.input[self.current + pop.len_utf8()..].chars().next()
+    }
+
+    fn peek_next_next(&self, pop: char) -> Option<char> {
+        if let Some(next) = self.input[self.current + pop.len_utf8()..].chars().next() {
+            if let Some(next_next) = self.input[self.current + pop.len_utf8() + next.len_utf8()..].chars().next() {
+                return Some(next_next);
+            }
+            return None;
+        };
+
+        None
+    }
+
+    fn peek_n(&self, n: usize) -> Option<char> {
+        self.input[self.current..].chars().nth(n)
+    }
+
     fn lookback(&mut self) -> Option<char> {
         if let Some(pop) = self.last_size_memo.pop() {
             return self.input[self.current - pop..].chars().next();
@@ -198,10 +274,6 @@ impl<'a> Lexer<'a> {
         true
     }
 
-    fn peek_next(&self, pop: char) -> Option<char> {
-        self.input[self.current + pop.len_utf8()..].chars().next()
-    }
-
     fn backtrack(&mut self, branch_point: usize) {
         let mut should_push = false;
         let mut popped: usize = 0;
@@ -221,6 +293,139 @@ impl<'a> Lexer<'a> {
         self.current = branch_point;
     }
 
+    fn function(&mut self, collect: bool) -> Result<(), LexerError> {
+        let mut should_align = false;
+        let mut branch_point = self.current;
+
+        match self.ident(false) {
+            Err(_) => {
+                self.backtrack(branch_point);
+                return Err(LexerError::new(
+                    LexerErrorReason::NO_MATCH,
+                    self.line,
+                    LexerSpan (self.start, self.current),
+                ));
+            },
+            _ => {}
+        }
+
+        self.advance();
+        should_align = true;
+
+        match self.peek() {
+            Some('(') => {
+                self.advance();
+                should_align = true;
+            },
+            _ => {
+                self.step_back();
+
+                return Err(LexerError::new(
+                    LexerErrorReason::NO_MATCH,
+                    self.line,
+                    LexerSpan (self.start, self.current),
+                ));
+            }
+        };
+
+        if should_align {
+            self.step_back();
+        }
+        
+        if (collect) {
+            
+        }
+
+        Ok(())
+    }
+
+    fn hash(&mut self, collect: bool) -> Result<(), LexerError> {
+        use utils::{ is_ident };
+
+        let mut should_align = false; // technically redundant here but i'll stick to convention for now
+        let mut id_hash = false;
+
+        if !self.catch_match('#') {
+            return Err(LexerError::new(
+                LexerErrorReason::NO_MATCH,
+                self.line,
+                LexerSpan (self.start, self.current),
+            ));
+        }
+
+        should_align = true;
+
+        if self.at_ident_start() {
+            id_hash = true;
+        }
+
+        match self.peek() {
+            Some(x) if is_ident(x) => {
+                self.advance();
+            },
+            Some(y) if y == '\\' => {
+                match self.escape(false) {
+                    Ok(()) => {},
+                    _ => {
+                        self.step_back();
+
+                        return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line, LexerSpan (self.start, self.current)));
+                    }
+                }
+            },
+            Some(n) => {
+                self.step_back();
+
+                return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line, LexerSpan (self.start, self.current)));
+            },
+            None => {
+                self.step_back();
+
+                return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line, LexerSpan (self.start, self.current)));
+            }
+        }
+
+        loop {
+            if let Some(curr) = self.peek() {
+                if is_ident(curr) {
+                    self.advance();
+                    should_align = true;
+                } else if self.at_valid_escape() {
+                    match self.escape(false) {
+                        Ok(()) => {
+                            self.advance();
+                            should_align = true;
+                            continue;
+                        },
+                        _ => {
+                            if should_align {
+                                self.step_back();
+
+                                return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line,  LexerSpan (self.start, self.current)));
+                            }
+                        }
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if should_align {
+            self.step_back();
+        }
+
+        if id_hash && collect {
+            self.add_token(Token::new(TokenKind::ID_HASH, self.line, Cow::Borrowed("")));
+        } else if !id_hash && collect {
+            self.add_token(Token::new(TokenKind::GENERIC_HASH, self.line, Cow::Borrowed("")));
+        }
+
+        Ok(())
+    }
+
     fn number(&mut self, collect: bool) -> Result<(), LexerError> {
         let mut should_align = false;
 
@@ -232,7 +437,7 @@ impl<'a> Lexer<'a> {
             Some(m) if m == '.' => {
                 self.advance();
                 if let Some(curr) = self.peek() {
-                    if curr.is_digit(10) {
+                    if curr.is_ascii_digit() {
                         self.advance();
                         self.digit(false);
                         should_align = true;
@@ -240,14 +445,14 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            Cow::Borrowed(""),
+                            LexerSpan (self.start, self.current),
                         ));
                     }
                 }
             }
             Some(d) => {
                 if let Some(curr) = self.peek() {
-                    if curr.is_digit(10) {
+                    if curr.is_ascii_digit() {
                         self.advance();
                         self.digit(false);
                         should_align = true;
@@ -259,7 +464,7 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            Cow::Borrowed(""),
+                            LexerSpan (self.start, self.current),
                         ));
                     }
                 }
@@ -276,10 +481,10 @@ impl<'a> Lexer<'a> {
                 if self.catch_match('e') || self.catch_match('E') {
                     should_align = true;
 
-                    self.catch_match('-') || self.catch_match('+');
+                    if !self.catch_match('-') { self.catch_match('+'); }
 
                     if let Some(curr) = self.peek() {
-                        if curr.is_digit(10) {
+                        if curr.is_ascii_digit() {
                             self.advance();
                             self.digit(false);
                             should_align = true;
@@ -289,7 +494,7 @@ impl<'a> Lexer<'a> {
                             return Err(LexerError::new(
                                 LexerErrorReason::UNTERMINATED_TOKEN,
                                 self.line,
-                                Cow::Borrowed(""),
+                                LexerSpan (self.start, self.current),
                             ));
                         }
                     } else {
@@ -298,7 +503,7 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            Cow::Borrowed(""),
+                            LexerSpan (self.start, self.current),
                         ));
                     }
                 }
@@ -311,7 +516,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
+                    LexerSpan (self.start, self.current),
                 ));
             }
         };
@@ -319,7 +524,7 @@ impl<'a> Lexer<'a> {
         if should_align {
             self.step_back();
 
-            if (collect) {
+            if collect {
                 self.add_token(Token::new(TokenKind::NUMBER, self.line, Cow::Borrowed("")));
             }
         }
@@ -331,14 +536,14 @@ impl<'a> Lexer<'a> {
         use utils::is_css_printable;
 
         let mut should_align = false;
-        let mut branch_point = self.current;
+        let branch_point = self.current;
         let mut current: char;
 
         if !self.catch_match('(') {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                Cow::Borrowed(""),
+                LexerSpan (self.start, self.current),
             ));
         }
 
@@ -350,7 +555,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        Cow::Borrowed(""),
+                        LexerSpan (self.start, self.current),
                     ));
                 }
                 current = self.peek().unwrap();
@@ -395,7 +600,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        Cow::Borrowed(""),
+                        LexerSpan (self.start, self.current),
                     ));
                 }
             }
@@ -405,23 +610,20 @@ impl<'a> Lexer<'a> {
             self.step_back();
         }
 
-        match self.whitespace(false) {
-            Ok(_) => {}
-            Err(_) => {} // whitespace matches 0 or more
-        }
+        if self.whitespace(false).is_ok() {}
 
         if self.at_end() {
             return Err(LexerError::new(
                 LexerErrorReason::UNTERMINATED_TOKEN,
                 self.line,
-                Cow::Borrowed(""),
+                LexerSpan (self.start, self.current),
             ));
         }
         current = self.peek().unwrap();
         if let Some(next) = self.peek_next(current) {
             if next == ')' {
                 self.advance();
-                if (collect) {
+                if collect {
                     self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
                 }
 
@@ -431,14 +633,14 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::UNTERMINATED_TOKEN,
                 self.line,
-                Cow::Borrowed(""),
+                LexerSpan (self.start, self.current),
             ));
         }
 
         Err(LexerError::new(
             LexerErrorReason::UNTERMINATED_TOKEN,
             self.line,
-            Cow::Borrowed(""),
+            LexerSpan (self.start, self.current),
         ))
     }
 
@@ -463,7 +665,7 @@ impl<'a> Lexer<'a> {
                             return Err(LexerError::new(
                                 LexerErrorReason::UNTERMINATED_TOKEN,
                                 self.line,
-                                Cow::Borrowed(""),
+                                LexerSpan (self.start, self.current),
                             ));
                         }
 
@@ -479,7 +681,7 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            Cow::Borrowed(""),
+                            LexerSpan (self.start, self.current),
                         ));
                     }
                 } else {
@@ -487,7 +689,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        Cow::Borrowed(""),
+                        LexerSpan (self.start, self.current),
                     ));
                 }
             }
@@ -503,7 +705,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        Cow::Borrowed(""),
+                        LexerSpan (self.start, self.current),
                     ));
                 }
 
@@ -522,7 +724,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
+                    LexerSpan (self.start, self.current),
                 ));
             }
         };
@@ -541,7 +743,7 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            Cow::Borrowed(""),
+                            LexerSpan (self.start, self.current),
                         ));
                     }
 
@@ -562,7 +764,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if (collect) {
+        if collect {
             self.add_token(Token::new(TokenKind::IDENT, self.line, Cow::Borrowed("")));
         }
 
@@ -579,7 +781,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::INVALID_TOKEN,
                 self.line,
-                Cow::Borrowed(""),
+                LexerSpan (self.start, self.current),
             ));
         }
         // invariant: if not at end, there should be a next char
@@ -588,7 +790,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                Cow::Borrowed(""),
+                LexerSpan (self.start, self.current),
             ));
         }
 
@@ -597,7 +799,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
+                    LexerSpan (self.start, self.current),
                 ));
             }
             self.advance();
@@ -609,7 +811,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        Cow::Borrowed(""),
+                        LexerSpan (self.start, self.current),
                     ));
                 }
                 Some(x) => {
@@ -619,7 +821,7 @@ impl<'a> Lexer<'a> {
                                 if lb == '\\' {
                                     continue;
                                 } else {
-                                    if (collect) {
+                                    if collect {
                                         self.add_token(Token::new(
                                             TokenKind::STRING,
                                             self.line,
@@ -634,7 +836,7 @@ impl<'a> Lexer<'a> {
                                 return Err(LexerError::new(
                                     LexerErrorReason::INVARIANT_VIOLATION,
                                     self.line,
-                                    Cow::Borrowed(""),
+                                    LexerSpan (self.start, self.current),
                                 ));
                             } //TODO: edge case. raise invariant violation error
                         }
@@ -648,11 +850,10 @@ impl<'a> Lexer<'a> {
                                     return Err(LexerError::new(
                                         LexerErrorReason::UNTERMINATED_TOKEN,
                                         self.line,
-                                        Cow::Borrowed(""),
+                                        LexerSpan (self.start, self.current),
                                     ));
                                 }
-                            } else {
-                            }
+                            } 
                             self.line += 1;
                         }
                         _ => {
@@ -671,7 +872,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                Cow::Borrowed(""),
+                LexerSpan (self.start, self.current),
             ));
         }
 
@@ -680,38 +881,38 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some(x) if x.is_ascii_digit() => {
                 self.hex_token(false);
-                if (collect) {
+                if collect {
                     self.add_token(Token::new(TokenKind::ESCAPE, self.line, Cow::Borrowed("")));
                 }
 
-                return Ok(());
+                Ok(())
             }
             Some(n) if self.is_newline(n) => {
                 self.step_back();
 
-                return Err(LexerError::new(
+                Err(LexerError::new(
                     LexerErrorReason::INVALID_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
-                ));
+                    LexerSpan (self.start, self.current),
+                ))
             }
             Some(_) => {
-                if (collect) {
+                if collect {
                     self.add_token(Token::new(TokenKind::ESCAPE, self.line, Cow::Borrowed("")));
                 }
 
-                return Ok(());
+                Ok(())
             }
             None => {
                 self.step_back();
 
-                return Err(LexerError::new(
+                Err(LexerError::new(
                     LexerErrorReason::INVALID_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
-                ));
+                    LexerSpan (self.start, self.current),
+                ))
             }
-        };
+        }
     }
 
     fn hex_token(&mut self, collect: bool) -> Result<(), LexerError> {
@@ -758,7 +959,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
+                    LexerSpan (self.start, self.current),
                 ));
             }
             // invariant: if not at end, there should be a next char
@@ -777,7 +978,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    Cow::Borrowed(""),
+                    LexerSpan (self.start, self.current),
                 ));
             } else if self.is_newline(x) {
                 self.line += 1;
@@ -791,7 +992,7 @@ impl<'a> Lexer<'a> {
         let mut should_align = false;
 
         while let Some(di) = self.peek() {
-            if !di.is_digit(10) {
+            if !di.is_ascii_digit() {
                 break;
             }
             should_align = true;
@@ -800,7 +1001,7 @@ impl<'a> Lexer<'a> {
 
         if should_align {
             self.step_back();
-            if (collect) {
+            if collect {
                 self.add_token(Token::new(
                     TokenKind::DIGIT_TOKEN,
                     self.line,
@@ -827,7 +1028,7 @@ impl<'a> Lexer<'a> {
 
         if should_align {
             self.step_back();
-            if (collect) {
+            if collect {
                 self.add_token(Token::new(
                     TokenKind::WHITESPACE,
                     self.line,
@@ -840,7 +1041,7 @@ impl<'a> Lexer<'a> {
         Err(LexerError::new(
             LexerErrorReason::NO_MATCH,
             self.line,
-            Cow::Borrowed(""),
+            LexerSpan (self.start, self.current),
         ))
     }
 
@@ -854,7 +1055,7 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     dual_seq = true;
                 }
-                if (collect) {
+                if collect {
                     self.add_token(Token::new(
                         TokenKind::WHITESPACE,
                         self.line,
@@ -864,7 +1065,7 @@ impl<'a> Lexer<'a> {
                 }
                 return dual_seq;
             }
-            if (collect) {
+            if collect {
                 self.add_token(Token::new(
                     TokenKind::WHITESPACE,
                     self.line,
@@ -877,7 +1078,7 @@ impl<'a> Lexer<'a> {
             self.line += 1;
         }
 
-        if (collect) {
+        if collect {
             self.add_token(Token::new(
                 TokenKind::WHITESPACE,
                 self.line,

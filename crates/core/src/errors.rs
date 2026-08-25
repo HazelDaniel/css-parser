@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::types::LocalError;
+use crate::types::{ LocalError, LexerSpan };
 
 pub static LEX_ERROR_MAP: OnceLock<HashMap<LexerErrorReason, &'static str>> = OnceLock::new();
 
@@ -16,25 +16,26 @@ pub enum LexerErrorReason {
 }
 
 #[rustfmt::skip]
-pub struct LexerError<'a> {
+pub struct LexerError {
     pub line:               usize,
     pub reason:             LexerErrorReason,
-    pub lexeme:             Cow<'a, str>,
+    pub span:               LexerSpan,
 }
 
-impl<'a> LocalError for LexerError<'a> {
+impl LocalError for LexerError {
     type Out = String;
 
     fn resolve(&self) -> Self::Out {
         let msg: &str = LEX_ERROR_MAP.get().unwrap().get(&self.reason).unwrap();
 
-        format!("{}: {}\n at line: {}", msg, self.lexeme, self.line).into()
+        format!("{}: {:?}\n at line: {}", msg, self.span, self.line)
     }
 }
 
-impl<'a> LexerError<'a> {
+impl LexerError {
     #[rustfmt::skip]
-    pub fn new(reason: LexerErrorReason, line: usize, lexeme: Cow<'a, str>) -> Self {
-        Self { reason, line, lexeme }
+    pub fn new(reason: LexerErrorReason, line: usize, span: LexerSpan) -> Self {
+        let LexerSpan (start, curr) = span;
+        Self { reason, line, span: LexerSpan (start, curr) }
     }
 }
