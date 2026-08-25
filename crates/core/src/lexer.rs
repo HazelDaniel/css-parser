@@ -172,14 +172,19 @@ impl<'a> Lexer<'a> {
                             return Ok(());
                         }
 
-                        if self.input[self.current..].starts_with("--") {
+                        if self.at_ident_start() {
                             match self.function(true) {
-                                Ok(res) => { return Ok(res)},
-                                _ => {
+                                Ok(()) => return Ok(()),
+                                Err(e) if matches!(
+                                    e.reason,
+                                    LexerErrorReason::NO_MATCH
+                                        | LexerErrorReason::MATCHED_PREFIX
+                                ) => {
                                     self.ident(true)?;
                                     return Ok(());
                                 }
-                            };
+                                Err(e) => return Err(e),
+                            }
                         }
 
                         if identifier == '-' {
@@ -274,66 +279,49 @@ impl<'a> Lexer<'a> {
         true
     }
 
-    fn backtrack(&mut self, branch_point: usize) {
-        let mut should_push = false;
-        let mut popped: usize = 0;
-
-        while let Some(pop) = self.last_size_memo.pop() {
-            if pop == branch_point {
-                should_push = true;
-                popped = pop;
-                break;
-            }
-        }
-
-        if should_push {
-            self.last_size_memo.push(popped);
-        }
-
+    fn backtrack(&mut self, branch_point: usize, memo_point: usize) {
         self.current = branch_point;
+        self.last_size_memo.truncate(memo_point);
     }
 
     fn function(&mut self, collect: bool) -> Result<(), LexerError> {
-        let mut should_align = false;
-        let mut branch_point = self.current;
+        let branch_point = self.current;
+        let memo_point = self.last_size_memo.len();
 
-        match self.ident(false) {
-            Err(_) => {
-                self.backtrack(branch_point);
-                return Err(LexerError::new(
-                    LexerErrorReason::NO_MATCH,
-                    self.line,
-                    LexerSpan (self.start, self.current),
-                ));
-            },
-            _ => {}
+        if !self.at_ident_start() {
+            return Err(LexerError::new(
+                LexerErrorReason::NO_MATCH,
+                self.line,
+                LexerSpan(self.start, self.current),
+            ));
         }
 
-        self.advance();
-        should_align = true;
+        self.ident(false)?;
 
+        self.advance();
         match self.peek() {
             Some('(') => {
                 self.advance();
-                should_align = true;
             },
             _ => {
-                self.step_back();
+                self.backtrack(branch_point, memo_point);
 
                 return Err(LexerError::new(
-                    LexerErrorReason::NO_MATCH,
+                    LexerErrorReason::MATCHED_PREFIX,
                     self.line,
                     LexerSpan (self.start, self.current),
                 ));
             }
         };
 
-        if should_align {
-            self.step_back();
-        }
-        
-        if (collect) {
-            
+        self.step_back();
+
+        if collect {
+            self.add_token(Token::new(
+                TokenKind::FUNCTION,
+                self.line,
+                Cow::Borrowed(""),
+            ));
         }
 
         Ok(())
@@ -537,6 +525,7 @@ impl<'a> Lexer<'a> {
 
         let mut should_align = false;
         let branch_point = self.current;
+        let memo_point = self.last_size_memo.len();
         let mut current: char;
 
         if !self.catch_match('(') {
@@ -550,7 +539,7 @@ impl<'a> Lexer<'a> {
         match self.whitespace(false) {
             Ok(_) => {}
             Err(_) => {
-                self.backtrack(branch_point);
+                self.backtrack(branch_point, memo_point);
                 if self.at_end() {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
@@ -648,6 +637,14 @@ impl<'a> Lexer<'a> {
         use utils::{is_ident, is_ident_start};
 
         let mut should_align = false;
+
+        if !self.at_ident_start() {
+            return Err(LexerError::new(
+                LexerErrorReason::NO_MATCH,
+                self.line,
+                LexerSpan(self.start, self.current),
+            ));
+        }
 
         match self.peek() {
             Some(x) if x == '-' => {
@@ -1191,5 +1188,34 @@ mod tests {
             })
         ));
         assert!(lexer.at_end());
+    }
+
+    #[test]
+    fn function_consumer_stops_on_the_opening_parenthesis() {
+        let mut lexer = Lexer::new("calc(");
+
+        assert!(lexer.function(true).is_ok());
+        assert_eq!(lexer.peek(), Some('('));
+        assert_eq!(lexer.tokens.len(), 1);
+        assert_eq!(lexer.tokens[0].kind, TokenKind::FUNCTION);
+
+        lexer.advance();
+        assert!(lexer.at_end());
+    }
+
+    #[test]
+    fn function_consumer_restores_state_when_no_parenthesis_follows() {
+        let mut lexer = Lexer::new("calc ");
+
+        let result = lexer.function(false);
+        assert!(matches!(
+            result,
+            Err(LexerError {
+                reason: LexerErrorReason::MATCHED_PREFIX,
+                ..
+            })
+        ));
+        assert_eq!(lexer.current, 0);
+        assert!(lexer.last_size_memo.is_empty());
     }
 }

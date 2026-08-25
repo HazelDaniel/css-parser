@@ -11,7 +11,8 @@ pub static LEX_ERROR_MAP: OnceLock<HashMap<LexerErrorReason, &'static str>> = On
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum LexerErrorReason {
     INVALID_TOKEN, UNTERMINATED_TOKEN, EOF,
-    NO_MATCH, // for '0 or more' match semantic
+    NO_MATCH, // consumer is inapplicable and consumed nothing
+    MATCHED_PREFIX, // larger consumer failed after a smaller consumer matched
     INVARIANT_VIOLATION, // for internal bugs during testing
 }
 
