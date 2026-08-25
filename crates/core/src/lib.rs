@@ -11,6 +11,7 @@ fn main() {
         HashMap::from([
             (LexerErrorReason::INVALID_TOKEN, "invalid token"),
             (LexerErrorReason::UNTERMINATED_TOKEN, "unterminated token"),
+            (LexerErrorReason::INVARIANT_VIOLATION, "invariant violation"),
             (LexerErrorReason::EOF, "unexpected end of file"),
         ])
     });

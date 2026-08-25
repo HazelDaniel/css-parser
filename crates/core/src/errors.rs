@@ -10,13 +10,14 @@ pub static LEX_ERROR_MAP: OnceLock<HashMap<LexerErrorReason, &'static str>> = On
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum LexerErrorReason {
     INVALID_TOKEN, UNTERMINATED_TOKEN, EOF,
+    NO_MATCH, // for '0 or more' match semantic
     INVARIANT_VIOLATION, // for internal bugs during testing
 }
 
 pub struct LexerError<'a> {
-    line:               usize,
-    reason:             LexerErrorReason,
-    lexeme:             Cow<'a, str>,
+    pub line:               usize,
+    pub reason:             LexerErrorReason,
+    pub lexeme:             Cow<'a, str>,
 }
 
 impl<'a> LocalError for LexerError<'a> {
