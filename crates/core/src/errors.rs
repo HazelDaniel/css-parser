@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::types::{ LocalError, LexerSpan };
+use crate::types::{LexerSpan, LocalError};
 
 pub static LEX_ERROR_MAP: OnceLock<HashMap<LexerErrorReason, &'static str>> = OnceLock::new();
 

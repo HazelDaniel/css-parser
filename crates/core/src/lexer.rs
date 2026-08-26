@@ -1,6 +1,6 @@
 use crate::errors::{LexerError, LexerErrorReason};
-use crate::types::LexerSpan;
 use crate::token::{Token, TokenKind};
+use crate::types::LexerSpan;
 
 #[rustfmt::skip]
 struct Lexer<'a> {
@@ -34,7 +34,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn at_ident_start(&self) -> bool {
-        use utils::{ is_ident_start };
+        use utils::is_ident_start;
 
         let a = self.peek();
         let b = self.peek_n(1);
@@ -42,17 +42,15 @@ impl<'a> Lexer<'a> {
         match a {
             Some(c) if is_ident_start(c) => true,
 
-            Some('-') => {
-                match b {
-                    Some('-') => true,
-                    Some(c) if is_ident_start(c) => true,
-                    Some('\\') => {
-                        let c = self.peek_n(2);
-                        matches!(c, Some(x) if !self.is_newline(x))
-                    }
-                    _ => false,
+            Some('-') => match b {
+                Some('-') => true,
+                Some(c) if is_ident_start(c) => true,
+                Some('\\') => {
+                    let c = self.peek_n(2);
+                    matches!(c, Some(x) if !self.is_newline(x))
                 }
-            }
+                _ => false,
+            },
 
             Some('\\') => {
                 matches!(b, Some(x) if !self.is_newline(x))
@@ -76,7 +74,11 @@ impl<'a> Lexer<'a> {
     pub fn scan(&mut self) -> &[Token] {
         match self.input.chars().next() {
             None => {
-                self.add_token(Token::new(TokenKind::EOF, self.line, LexerSpan(self.current, self.current)));
+                self.add_token(Token::new(
+                    TokenKind::EOF,
+                    self.line,
+                    LexerSpan(self.current, self.current),
+                ));
                 return &self.tokens[..];
             }
             Some(_) => {
@@ -94,7 +96,11 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
-        self.add_token(Token::new(TokenKind::EOF, self.line, LexerSpan(self.current, self.current)));
+        self.add_token(Token::new(
+            TokenKind::EOF,
+            self.line,
+            LexerSpan(self.current, self.current),
+        ));
 
         &self.tokens[..]
     }
@@ -268,7 +274,10 @@ impl<'a> Lexer<'a> {
 
     fn peek_next_next(&self, pop: char) -> Option<char> {
         if let Some(next) = self.input[self.current + pop.len_utf8()..].chars().next() {
-            if let Some(next_next) = self.input[self.current + pop.len_utf8() + next.len_utf8()..].chars().next() {
+            if let Some(next_next) = self.input[self.current + pop.len_utf8() + next.len_utf8()..]
+                .chars()
+                .next()
+            {
                 return Some(next_next);
             }
             return None;
@@ -326,14 +335,14 @@ impl<'a> Lexer<'a> {
         match self.peek() {
             Some('(') => {
                 self.advance();
-            },
+            }
             _ => {
                 self.backtrack(branch_point, memo_point);
 
                 return Err(LexerError::new(
                     LexerErrorReason::MATCHED_PREFIX,
                     self.line,
-                    LexerSpan (self.start, self.current),
+                    LexerSpan(self.start, self.current),
                 ));
             }
         };
@@ -382,15 +391,13 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                LexerSpan (self.start, self.current),
+                LexerSpan(self.start, self.current),
             ));
         }
 
         let id_hash = self.at_ident_start();
 
-        if !matches!(self.peek(), Some(c) if utils::is_ident(c))
-            && !self.at_valid_escape()
-        {
+        if !matches!(self.peek(), Some(c) if utils::is_ident(c)) && !self.at_valid_escape() {
             self.backtrack(branch_point, memo_point);
             return Err(LexerError::new(
                 LexerErrorReason::MATCHED_PREFIX,
@@ -431,8 +438,8 @@ impl<'a> Lexer<'a> {
             self.advance();
         }
 
-        let starts_fraction = self.peek() == Some('.')
-            && matches!(self.peek_n(1), Some(c) if c.is_ascii_digit());
+        let starts_fraction =
+            self.peek() == Some('.') && matches!(self.peek_n(1), Some(c) if c.is_ascii_digit());
 
         if starts_fraction {
             self.advance();
@@ -444,9 +451,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
             }
 
-            if self.peek() == Some('.')
-                && matches!(self.peek_n(1), Some(c) if c.is_ascii_digit())
-            {
+            if self.peek() == Some('.') && matches!(self.peek_n(1), Some(c) if c.is_ascii_digit()) {
                 self.advance();
                 while matches!(self.peek(), Some(c) if c.is_ascii_digit()) {
                     self.advance();
@@ -498,7 +503,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                LexerSpan (self.start, self.current),
+                LexerSpan(self.start, self.current),
             ));
         }
 
@@ -622,7 +627,7 @@ impl<'a> Lexer<'a> {
                             return Err(LexerError::new(
                                 LexerErrorReason::UNTERMINATED_TOKEN,
                                 self.line,
-                                LexerSpan (self.start, self.current),
+                                LexerSpan(self.start, self.current),
                             ));
                         }
 
@@ -638,7 +643,7 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            LexerSpan (self.start, self.current),
+                            LexerSpan(self.start, self.current),
                         ));
                     }
                 } else {
@@ -646,7 +651,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        LexerSpan (self.start, self.current),
+                        LexerSpan(self.start, self.current),
                     ));
                 }
             }
@@ -662,7 +667,7 @@ impl<'a> Lexer<'a> {
                     return Err(LexerError::new(
                         LexerErrorReason::UNTERMINATED_TOKEN,
                         self.line,
-                        LexerSpan (self.start, self.current),
+                        LexerSpan(self.start, self.current),
                     ));
                 }
 
@@ -684,7 +689,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    LexerSpan (self.start, self.current),
+                    LexerSpan(self.start, self.current),
                 ));
             }
         };
@@ -703,7 +708,7 @@ impl<'a> Lexer<'a> {
                         return Err(LexerError::new(
                             LexerErrorReason::UNTERMINATED_TOKEN,
                             self.line,
-                            LexerSpan (self.start, self.current),
+                            LexerSpan(self.start, self.current),
                         ));
                     }
 
@@ -739,7 +744,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                LexerSpan (self.start, self.current),
+                LexerSpan(self.start, self.current),
             ));
         }
         // invariant: if not at end, there should be a next char
@@ -748,7 +753,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                LexerSpan (self.start, self.current),
+                LexerSpan(self.start, self.current),
             ));
         }
 
@@ -817,7 +822,7 @@ impl<'a> Lexer<'a> {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
-                LexerSpan (self.start, self.current),
+                LexerSpan(self.start, self.current),
             ));
         }
 
@@ -838,7 +843,7 @@ impl<'a> Lexer<'a> {
                 Err(LexerError::new(
                     LexerErrorReason::INVALID_TOKEN,
                     self.line,
-                    LexerSpan (self.start, self.current),
+                    LexerSpan(self.start, self.current),
                 ))
             }
             Some(_) => {
@@ -854,7 +859,7 @@ impl<'a> Lexer<'a> {
                 Err(LexerError::new(
                     LexerErrorReason::INVALID_TOKEN,
                     self.line,
-                    LexerSpan (self.start, self.current),
+                    LexerSpan(self.start, self.current),
                 ))
             }
         }
@@ -900,7 +905,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    LexerSpan (self.start, self.current),
+                    LexerSpan(self.start, self.current),
                 ));
             }
             // invariant: if not at end, there should be a next char
@@ -919,7 +924,7 @@ impl<'a> Lexer<'a> {
                 return Err(LexerError::new(
                     LexerErrorReason::UNTERMINATED_TOKEN,
                     self.line,
-                    LexerSpan (self.start, self.current),
+                    LexerSpan(self.start, self.current),
                 ));
             } else if self.is_newline(x) {
                 self.line += 1;
@@ -983,14 +988,17 @@ impl<'a> Lexer<'a> {
         Err(LexerError::new(
             LexerErrorReason::NO_MATCH,
             self.line,
-            LexerSpan (self.start, self.current),
+            LexerSpan(self.start, self.current),
         ))
     }
 }
 
 mod utils {
     pub fn is_css_whitespace(c: char) -> bool {
-        matches!(c, '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | '\u{0020}')
+        matches!(
+            c,
+            '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | '\u{0020}'
+        )
     }
 
     pub fn is_css_printable(c: char) -> bool {
@@ -1406,13 +1414,16 @@ mod tests {
             let mut lexer = Lexer::new(input);
 
             let result = lexer.number(false);
-            assert!(matches!(
-                result,
-                Err(LexerError {
-                    reason: LexerErrorReason::MATCHED_PREFIX,
-                    ..
-                })
-            ), "input: {input}");
+            assert!(
+                matches!(
+                    result,
+                    Err(LexerError {
+                        reason: LexerErrorReason::MATCHED_PREFIX,
+                        ..
+                    })
+                ),
+                "input: {input}"
+            );
             assert_eq!(lexer.current, 0, "input: {input}");
             assert!(lexer.last_size_memo.is_empty(), "input: {input}");
         }
@@ -1528,7 +1539,11 @@ mod tests {
             let mut lexer = Lexer::new(input);
 
             assert!(lexer.run().is_ok(), "input: {input:?}");
-            assert_eq!(lexer.tokens[0].kind, TokenKind::DELIM('#'), "input: {input:?}");
+            assert_eq!(
+                lexer.tokens[0].kind,
+                TokenKind::DELIM('#'),
+                "input: {input:?}"
+            );
             assert_eq!(lexer.peek(), Some('#'), "input: {input:?}");
         }
     }
