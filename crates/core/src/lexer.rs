@@ -127,13 +127,9 @@ impl<'a> Lexer<'a> {
                     ':' => { self.add_token(Token::new(TokenKind::COLON, self.line, Cow::Borrowed(":"))); },
                     ',' => { self.add_token(Token::new(TokenKind::COMMA, self.line, Cow::Borrowed(","))); },
                     '/' => {
-                        if let Some(cmp) = self.peek_next('/') {
-                            if cmp == '*'  {
-                                self.comment()?;
-                                return Ok(());
-                            } else {
-                                self.add_token(Token::new(TokenKind::SLASH, self.line, Cow::Borrowed("/")));
-                            }
+                        if self.peek_next('/') == Some('*') {
+                            self.comment()?;
+                            return Ok(());
                         }
                         self.add_token(Token::new(TokenKind::SLASH, self.line, Cow::Borrowed("/")));
                     },
@@ -174,14 +170,17 @@ impl<'a> Lexer<'a> {
                     },
                     identifier => {
                         if self.input[self.current..].starts_with("<!--") {
-                            self.current += 3;
+                            self.advance();
+                            self.advance();
+                            self.advance();
                             self.add_token(Token::new(TokenKind::CDO, self.line, Cow::Borrowed("<!--")));
                             return Ok(());
                         }
 
                         if self.input[self.current..].starts_with("-->") {
-                            self.current += 3;
-                            self.add_token(Token::new(TokenKind::CDO, self.line, Cow::Borrowed("-->")));
+                            self.advance();
+                            self.advance();
+                            self.add_token(Token::new(TokenKind::CDC, self.line, Cow::Borrowed("-->")));
                             return Ok(());
                         }
 
@@ -233,9 +232,17 @@ impl<'a> Lexer<'a> {
                                 Ok(()) => { return Ok(()); },
                                 Err(_) => {
                                     self.add_token(Token::new(TokenKind::DELIM('#'), self.line, Cow::Borrowed("")));
+                                    return Ok(());
                                 }
                             };
                         }
+
+                        self.add_token(Token::new(
+                            TokenKind::DELIM(identifier),
+                            self.line,
+                            Cow::Borrowed(""),
+                        ));
+                        return Ok(());
 
                     }
                 }
@@ -1434,6 +1441,48 @@ mod tests {
         let mut prefix = Lexer::new("urlx(foo)");
         assert!(prefix.run().is_ok());
         assert_eq!(prefix.tokens[0].kind, TokenKind::FUNCTION);
+    }
+
+    #[test]
+    fn run_emits_delim_for_unmatched_code_points() {
+        for delimiter in ['*', '=', '>', '<', '~', '|', '^', '$', '&', '!', '?', '%'] {
+            let input = format!("{delimiter}x");
+            let mut lexer = Lexer::new(&input);
+
+            assert!(lexer.run().is_ok(), "delimiter: {delimiter}");
+            assert_eq!(lexer.tokens[0].kind, TokenKind::DELIM(delimiter));
+            assert_eq!(lexer.peek(), Some(delimiter));
+
+            lexer.advance();
+            assert_eq!(lexer.peek(), Some('x'));
+        }
+    }
+
+    #[test]
+    fn run_emits_one_delim_for_a_non_comment_slash() {
+        let mut lexer = Lexer::new("/x");
+
+        assert!(lexer.run().is_ok());
+        assert_eq!(lexer.tokens.len(), 1);
+        assert_eq!(lexer.tokens[0].kind, TokenKind::SLASH);
+        assert_eq!(lexer.peek(), Some('/'));
+    }
+
+    #[test]
+    fn run_emits_cdo_and_cdc_with_correct_cursor_alignment() {
+        let mut cdo = Lexer::new("<!--x");
+        assert!(cdo.run().is_ok());
+        assert_eq!(cdo.tokens[0].kind, TokenKind::CDO);
+        assert_eq!(cdo.peek(), Some('-'));
+        cdo.advance();
+        assert_eq!(cdo.peek(), Some('x'));
+
+        let mut cdc = Lexer::new("-->x");
+        assert!(cdc.run().is_ok());
+        assert_eq!(cdc.tokens[0].kind, TokenKind::CDC);
+        assert_eq!(cdc.peek(), Some('>'));
+        cdc.advance();
+        assert_eq!(cdc.peek(), Some('x'));
     }
 
     #[test]
