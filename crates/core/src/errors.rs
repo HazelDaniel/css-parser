@@ -1,10 +1,18 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use crate::types::{LexerSpan, LocalError};
 
-pub static LEX_ERROR_MAP: OnceLock<HashMap<LexerErrorReason, &'static str>> = OnceLock::new();
+pub static LEX_ERROR_MAP: LazyLock<HashMap<LexerErrorReason, &'static str>> = LazyLock::new(|| {
+    HashMap::from([
+        (LexerErrorReason::INVALID_TOKEN, "invalid token"),
+        (LexerErrorReason::UNTERMINATED_TOKEN, "unterminated token"),
+        (LexerErrorReason::EOF, "unexpected end of file"),
+        (LexerErrorReason::NO_MATCH, "no match"),
+        (LexerErrorReason::MATCHED_PREFIX, "matched prefix"),
+        (LexerErrorReason::INVARIANT_VIOLATION, "invariant violation"),
+    ])
+});
 
 #[rustfmt::skip]
 #[allow(non_camel_case_types)]
@@ -27,7 +35,7 @@ impl LocalError for LexerError {
     type Out = String;
 
     fn resolve(&self) -> Self::Out {
-        let msg: &str = LEX_ERROR_MAP.get().unwrap().get(&self.reason).unwrap();
+        let msg: &str = LEX_ERROR_MAP.get(&self.reason).unwrap();
 
         format!("{}: {:?}\n at line: {}", msg, self.span, self.line)
     }

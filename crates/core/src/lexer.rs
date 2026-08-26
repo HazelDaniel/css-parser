@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::errors::{LexerError, LexerErrorReason};
 use crate::token::{Token, TokenKind};
 use crate::types::LexerSpan;
@@ -85,7 +87,7 @@ impl<'a> Lexer<'a> {
                 loop {
                     match self.run() {
                         Ok(()) => {}
-                        Err(e) => {
+                        Err(_e) => {
                             // fatal lexer errors are reported, bad-token semantic is preserved
                         }
                     }
@@ -246,10 +248,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn advance(&mut self) {
-        let mut len: usize = 0;
-
         if let Some(pop) = self.input[self.current..].chars().next() {
-            len = pop.len_utf8();
+            let len = pop.len_utf8();
             self.current += len;
             // invariant assumption: advance will always be called before any setback-lookback combination
             // that way, the references to last size are valid at any given time
@@ -612,14 +612,12 @@ impl<'a> Lexer<'a> {
         }
 
         match self.peek() {
-            Some(x) if x == '-' => {
+            Some('-') => {
                 self.advance();
                 should_align = true;
 
                 if let Some(curr) = self.peek() {
-                    if curr == '-' {
-                        self.advance();
-                    } else if is_ident_start(curr) {
+                    if curr == '-' || is_ident_start(curr) {
                         self.advance();
                     } else if curr == '\\' {
                         if !self.at_valid_escape() {
@@ -659,7 +657,7 @@ impl<'a> Lexer<'a> {
                 self.advance();
                 should_align = true;
             }
-            Some(v) if v == '\\' => {
+            Some('\\') => {
                 if !self.at_valid_escape() {
                     if should_align {
                         self.step_back();
@@ -700,7 +698,7 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     should_align = true;
                 }
-                Some(v) if v == '\\' => {
+                Some('\\') => {
                     if !self.at_valid_escape() {
                         if should_align {
                             self.step_back();
@@ -816,8 +814,6 @@ impl<'a> Lexer<'a> {
     }
 
     fn escape(&mut self, collect: bool) -> Result<(), LexerError> {
-        let mut should_align = false;
-
         if self.peek() != Some('\\') {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
@@ -827,10 +823,9 @@ impl<'a> Lexer<'a> {
         }
 
         self.advance();
-        should_align = true;
         match self.peek() {
             Some(x) if x.is_ascii_digit() => {
-                self.hex_token(false);
+                self.hex_token(false)?;
                 if collect {
                     self.add_token(self.token(TokenKind::ESCAPE));
                 }
