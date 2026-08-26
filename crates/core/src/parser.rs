@@ -799,4 +799,102 @@ mod tests {
         };
         assert!(rule.block.as_ref().unwrap().closing.is_none());
     }
+
+    #[test]
+    fn preserves_unmatched_closing_tokens_and_continues_after_the_declaration() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::PAREN_CLOSE),
+            token(TokenKind::SEMICOLON),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_stylesheet();
+
+        assert_eq!(result.errors.len(), 1);
+        let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
+            panic!("expected a qualified rule");
+        };
+        let items = &rule.block.as_ref().unwrap().items;
+        assert_eq!(items.len(), 2);
+        let StyleBlockItem::DECLARATION(first) = &items[0] else {
+            panic!("expected the first item to be a declaration");
+        };
+        assert!(matches!(
+            first.value[0],
+            ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::PAREN_CLOSE,
+                ..
+            })
+        ));
+        assert!(matches!(items[1], StyleBlockItem::DECLARATION(_)));
+    }
+
+    #[test]
+    fn reports_unterminated_function_without_fabricating_a_closing_token() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::FUNCTION),
+            token(TokenKind::NUMBER),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_stylesheet();
+
+        assert_eq!(result.errors.len(), 2);
+        let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
+            panic!("expected a qualified rule");
+        };
+        let StyleBlockItem::DECLARATION(declaration) = &rule.block.as_ref().unwrap().items[0]
+        else {
+            panic!("expected a declaration");
+        };
+        let ComponentValue::FUNCTION(function) = &declaration.value[0] else {
+            panic!("expected a function value");
+        };
+        assert!(function.closing.is_none());
+    }
+
+    #[test]
+    fn retains_declarations_after_recovering_from_invalid_block_content() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::DELIM('&')),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::SEMICOLON),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_stylesheet();
+
+        assert_eq!(result.errors.len(), 1);
+        let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
+            panic!("expected a qualified rule");
+        };
+        assert_eq!(rule.block.as_ref().unwrap().items.len(), 1);
+        assert!(matches!(
+            rule.block.as_ref().unwrap().items[0],
+            StyleBlockItem::DECLARATION(_)
+        ));
+    }
 }
