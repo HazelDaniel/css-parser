@@ -225,6 +225,124 @@ pub fn walk_function<V: Visitor + ?Sized>(visitor: &mut V, function: &Function) 
     }
 }
 
+/// Renders a stylesheet AST as an indented tree.
+#[derive(Debug, Default)]
+pub struct AstPrinter {
+    output: String,
+    depth: usize,
+}
+
+impl AstPrinter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn render(stylesheet: &Stylesheet) -> String {
+        let mut printer = Self::new();
+        printer.visit_stylesheet(stylesheet);
+        printer.output
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.output
+    }
+
+    fn enter(&mut self, label: impl std::fmt::Display) {
+        use std::fmt::Write;
+
+        let _ = writeln!(self.output, "{}(__ {label}", "  ".repeat(self.depth));
+        self.depth += 1;
+    }
+
+    fn leave(&mut self) {
+        self.depth -= 1;
+    }
+}
+
+impl Visitor for AstPrinter {
+    fn visit_stylesheet(&mut self, stylesheet: &Stylesheet) {
+        self.output.push_str("Stylesheet\n");
+        self.depth += 1;
+        walk_stylesheet(self, stylesheet);
+        self.depth -= 1;
+    }
+
+    fn visit_rule(&mut self, rule: &Rule) {
+        let label = match rule {
+            Rule::AT_RULE(_) => "Rule::AT_RULE",
+            Rule::QUALIFIED_RULE(_) => "Rule::QUALIFIED_RULE",
+        };
+        self.enter(label);
+        walk_rule(self, rule);
+        self.leave();
+    }
+
+    fn visit_at_rule(&mut self, at_rule: &AtRule) {
+        self.enter("AtRule");
+        walk_at_rule(self, at_rule);
+        self.leave();
+    }
+
+    fn visit_qualified_rule(&mut self, rule: &QualifiedRule) {
+        self.enter("QualifiedRule");
+        walk_qualified_rule(self, rule);
+        self.leave();
+    }
+
+    fn visit_style_block(&mut self, block: &StyleBlock) {
+        self.enter("StyleBlock");
+        walk_style_block(self, block);
+        self.leave();
+    }
+
+    fn visit_style_block_item(&mut self, item: &StyleBlockItem) {
+        let label = match item {
+            StyleBlockItem::DECLARATION(_) => "StyleBlockItem::DECLARATION",
+            StyleBlockItem::AT_RULE(_) => "StyleBlockItem::AT_RULE",
+        };
+        self.enter(label);
+        walk_style_block_item(self, item);
+        self.leave();
+    }
+
+    fn visit_declaration(&mut self, declaration: &Declaration) {
+        self.enter(format!("Declaration (important={})", declaration.important));
+        walk_declaration(self, declaration);
+        self.leave();
+    }
+
+    fn visit_component_value(&mut self, value: &ComponentValue) {
+        let label = match value {
+            ComponentValue::PRESERVED(_) => "ComponentValue::PRESERVED",
+            ComponentValue::SIMPLE_BLOCK(_) => "ComponentValue::SIMPLE_BLOCK",
+            ComponentValue::FUNCTION(_) => "ComponentValue::FUNCTION",
+        };
+        self.enter(label);
+        walk_component_value(self, value);
+        self.leave();
+    }
+
+    fn visit_simple_block(&mut self, block: &SimpleBlock) {
+        self.enter(format!("SimpleBlock ({:?})", block.opening.kind));
+        walk_simple_block(self, block);
+        self.leave();
+    }
+
+    fn visit_function(&mut self, function: &Function) {
+        self.enter("Function");
+        walk_function(self, function);
+        self.leave();
+    }
+
+    fn visit_token(&mut self, token: &TokenData) {
+        self.enter(format!(
+            "Token::{:?} (line={}, span={:?})",
+            token.kind, token.line, token.span
+        ));
+        self.leave();
+    }
+}
+
 #[rustfmt::skip]
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1153,5 +1271,29 @@ mod tests {
         assert_eq!(visitor.simple_blocks, 2);
         assert_eq!(visitor.functions, 1);
         assert_eq!(visitor.tokens, 15);
+    }
+
+    #[test]
+    fn ast_printer_renders_the_ast_as_a_tree() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+        let result = parser.parse_stylesheet();
+
+        let output = AstPrinter::render(&result.value);
+
+        assert!(output.starts_with("Stylesheet\n"));
+        assert!(output.contains("  (__ Rule::QUALIFIED_RULE\n"));
+        assert!(output.contains("    (__ QualifiedRule\n"));
+        assert!(output.contains("      (__ StyleBlock\n"));
+        assert!(output.contains("          (__ Declaration (important=false)\n"));
+        assert!(output.contains("              (__ Token::NUMBER"));
     }
 }
