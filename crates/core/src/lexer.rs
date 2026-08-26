@@ -159,7 +159,13 @@ impl<'a> Lexer<'a> {
                         self.number(true)?;
                     },
                     '\\' => {
-                        self.escape(true)?;
+                        match self.escape(true) {
+                            Ok(()) => {}
+                            Err(e) if e.reason == LexerErrorReason::INVALID_TOKEN => {
+                                self.add_token(self.token(TokenKind::DELIM('\\')));
+                            }
+                            Err(e) => return Err(e),
+                        }
                     },
                     '@' => {
                         match self.at_keyword(true) {
