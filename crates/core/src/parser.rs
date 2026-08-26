@@ -49,6 +49,14 @@ pub struct QualifiedRule {
 }
 
 #[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declaration {
+    pub name:               TokenData,
+    pub value:              Vec<ComponentValue>,
+    pub important:          bool,
+}
+
+#[rustfmt::skip]
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComponentValue {
@@ -137,6 +145,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    pub fn parse_declaration_list(&mut self) -> ParseResult<Vec<Declaration>> {
+        let mut declarations = Vec::new();
+
+        loop {
+            while self.match_kind(TokenKind::WHITESPACE) || self.match_kind(TokenKind::SEMICOLON) {}
+
+            if matches!(
+                self.peek_kind(),
+                Some(TokenKind::EOF | TokenKind::CURLY_CLOSE) | None
+            ) {
+                break;
+            }
+
+            if self.check(TokenKind::IDENT) {
+                if let Some(declaration) = self.parse_declaration() {
+                    declarations.push(declaration);
+                }
+            } else {
+                self.error(ParseErrorReason::UNEXPECTED_TOKEN);
+                self.synchronize_declaration();
+            }
+        }
+
+        ParseResult {
+            value: declarations,
+            errors: std::mem::take(&mut self.errors),
+        }
+    }
+
     fn parse_at_rule(&mut self) -> Option<AtRule> {
         let name = self.expect_consume(TokenKind::AT_KEYWORD)?;
         let mut prelude = Vec::new();
@@ -195,6 +232,85 @@ impl<'a> Parser<'a> {
                 prelude.push(value);
             }
         }
+    }
+
+    fn parse_declaration(&mut self) -> Option<Declaration> {
+        let name = self.consume()?;
+
+        while self.match_kind(TokenKind::WHITESPACE) {}
+
+        if !self.match_kind(TokenKind::COLON) {
+            self.error(ParseErrorReason::UNEXPECTED_TOKEN);
+            self.synchronize_declaration();
+            return None;
+        }
+
+        let mut value = Vec::new();
+
+        while !matches!(
+            self.peek_kind(),
+            Some(TokenKind::SEMICOLON | TokenKind::EOF | TokenKind::CURLY_CLOSE) | None
+        ) {
+            if let Some(component) = self.parse_component_value() {
+                value.push(component);
+            }
+        }
+
+        let mut value_end = value.len();
+
+        while matches!(
+            value.get(value_end.saturating_sub(1)),
+            Some(ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::WHITESPACE,
+                ..
+            }))
+        ) {
+            value_end -= 1;
+        }
+
+        let important_index = (value_end > 0).then_some(value_end - 1).filter(|index| {
+            matches!(
+                value.get(*index),
+                Some(ComponentValue::PRESERVED(TokenData {
+                    kind: TokenKind::IMPORTANT_TOKEN,
+                    ..
+                }))
+            )
+        });
+
+        let important = important_index.is_some();
+
+        if let Some(index) = important_index {
+            value.remove(index);
+            while matches!(
+                value.last(),
+                Some(ComponentValue::PRESERVED(TokenData {
+                    kind: TokenKind::WHITESPACE,
+                    ..
+                }))
+            ) {
+                value.pop();
+            }
+        }
+
+        self.match_kind(TokenKind::SEMICOLON);
+
+        Some(Declaration {
+            name,
+            value,
+            important,
+        })
+    }
+
+    fn synchronize_declaration(&mut self) {
+        while !matches!(
+            self.peek_kind(),
+            Some(TokenKind::SEMICOLON | TokenKind::EOF | TokenKind::CURLY_CLOSE) | None
+        ) {
+            self.current += 1;
+        }
+
+        self.match_kind(TokenKind::SEMICOLON);
     }
 
     fn parse_component_value(&mut self) -> Option<ComponentValue> {
@@ -409,5 +525,54 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.errors[0].reason, ParseErrorReason::UNEXPECTED_EOF);
         assert!(result.value.rule_list.len() == 1);
+    }
+
+    #[test]
+    fn parses_declarations_and_marks_important_values() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::WHITESPACE),
+            token(TokenKind::IMPORTANT_TOKEN),
+            token(TokenKind::SEMICOLON),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::FUNCTION),
+            token(TokenKind::NUMBER),
+            token(TokenKind::PAREN_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_declaration_list();
+
+        assert!(result.errors.is_empty());
+        assert_eq!(result.value.len(), 2);
+        assert!(result.value[0].important);
+        assert_eq!(result.value[0].value.len(), 1);
+        assert!(matches!(
+            result.value[1].value[0],
+            ComponentValue::FUNCTION(_)
+        ));
+    }
+
+    #[test]
+    fn declaration_recovery_continues_after_a_missing_colon() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::NUMBER),
+            token(TokenKind::SEMICOLON),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_declaration_list();
+
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.value.len(), 1);
     }
 }
