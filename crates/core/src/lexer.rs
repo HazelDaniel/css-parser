@@ -396,10 +396,8 @@ impl<'a> Lexer<'a> {
     }
 
     fn hash(&mut self, collect: bool) -> Result<(), LexerError> {
-        use utils::{ is_ident };
-
-        let mut should_align = false; // technically redundant here but i'll stick to convention for now
-        let mut id_hash = false;
+        let branch_point = self.current;
+        let memo_point = self.last_size_memo.len();
 
         if !self.catch_match('#') {
             return Err(LexerError::new(
@@ -409,74 +407,38 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        should_align = true;
+        let id_hash = self.at_ident_start();
 
-        if self.at_ident_start() {
-            id_hash = true;
-        }
-
-        match self.peek() {
-            Some(x) if is_ident(x) => {
-                self.advance();
-            },
-            Some(y) if y == '\\' => {
-                match self.escape(false) {
-                    Ok(()) => {},
-                    _ => {
-                        self.step_back();
-
-                        return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line, LexerSpan (self.start, self.current)));
-                    }
-                }
-            },
-            Some(n) => {
-                self.step_back();
-
-                return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line, LexerSpan (self.start, self.current)));
-            },
-            None => {
-                self.step_back();
-
-                return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line, LexerSpan (self.start, self.current)));
-            }
+        if !matches!(self.peek(), Some(c) if utils::is_ident(c))
+            && !self.at_valid_escape()
+        {
+            self.backtrack(branch_point, memo_point);
+            return Err(LexerError::new(
+                LexerErrorReason::MATCHED_PREFIX,
+                self.line,
+                LexerSpan(self.start, self.current),
+            ));
         }
 
         loop {
-            if let Some(curr) = self.peek() {
-                if is_ident(curr) {
-                    self.advance();
-                    should_align = true;
-                } else if self.at_valid_escape() {
-                    match self.escape(false) {
-                        Ok(()) => {
-                            self.advance();
-                            should_align = true;
-                            continue;
-                        },
-                        _ => {
-                            if should_align {
-                                self.step_back();
-
-                                return Err(LexerError::new(LexerErrorReason::UNTERMINATED_TOKEN, self.line,  LexerSpan (self.start, self.current)));
-                            }
-                        }
-                    }
-                } else {
-                    break;
-                }
+            if matches!(self.peek(), Some(c) if utils::is_ident(c)) {
+                self.advance();
+            } else if self.at_valid_escape() {
+                self.escape(false)?;
+                self.advance();
             } else {
                 break;
             }
         }
 
-        if should_align {
-            self.step_back();
-        }
+        self.step_back();
 
-        if id_hash && collect {
-            self.add_token(Token::new(TokenKind::ID_HASH, self.line, Cow::Borrowed("")));
-        } else if !id_hash && collect {
-            self.add_token(Token::new(TokenKind::GENERIC_HASH, self.line, Cow::Borrowed("")));
+        if collect {
+            if id_hash {
+                self.add_token(Token::new(TokenKind::ID_HASH, self.line, Cow::Borrowed("")));
+            } else {
+                self.add_token(Token::new(TokenKind::GENERIC_HASH, self.line, Cow::Borrowed("")));
+            }
         }
 
         Ok(())
@@ -1586,5 +1548,37 @@ mod tests {
         ));
         assert_eq!(lexer.current, 0);
         assert!(lexer.last_size_memo.is_empty());
+    }
+
+    #[test]
+    fn hash_consumer_classifies_id_and_generic_hashes() {
+        let cases = [
+            ("#idx", TokenKind::ID_HASH, 'x'),
+            ("#123x", TokenKind::GENERIC_HASH, 'x'),
+            ("#-customx", TokenKind::ID_HASH, 'x'),
+            ("#-", TokenKind::GENERIC_HASH, '-'),
+            ("#-x", TokenKind::ID_HASH, 'x'),
+            ("#--x", TokenKind::ID_HASH, 'x'),
+            ("#\\31 23x", TokenKind::ID_HASH, 'x'),
+        ];
+
+        for (input, expected_kind, expected_last) in cases {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.run().is_ok(), "input: {input}");
+            assert_eq!(lexer.tokens[0].kind, expected_kind, "input: {input}");
+            assert_eq!(lexer.peek(), Some(expected_last), "input: {input}");
+        }
+    }
+
+    #[test]
+    fn hash_consumer_falls_back_to_a_delim_without_consuming_a_name() {
+        for input in ["#", "# ", "#(", "#\\\n"] {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.run().is_ok(), "input: {input:?}");
+            assert_eq!(lexer.tokens[0].kind, TokenKind::DELIM('#'), "input: {input:?}");
+            assert_eq!(lexer.peek(), Some('#'), "input: {input:?}");
+        }
     }
 }
