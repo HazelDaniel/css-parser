@@ -3,7 +3,7 @@ use crate::types::LexerSpan;
 pub trait Object {}
 
 #[rustfmt::skip]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum TokenKind {
 /* NOTE: Adding a new TokenKind must require
