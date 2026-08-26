@@ -5,7 +5,7 @@ use crate::token::{Token, TokenKind};
 use crate::types::LexerSpan;
 
 #[rustfmt::skip]
-struct Lexer<'a> {
+pub struct Lexer<'a> {
     input:              &'a str,
     start:              usize,
     current:            usize,
@@ -18,7 +18,7 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     #[rustfmt::skip]
-    fn new(input: &'a str) -> Self {
+    pub fn new(input: &'a str) -> Self {
         Self { input, start: 0, line: 1, current: 0, tokens: Vec::new(), last_size_memo: Vec::new() }
     }
 
