@@ -1,0 +1,35 @@
+.builtin-functions {
+  width: calc(100% - 20px);
+  color: rgb(255, 0, 0);
+  background: rgba(0, 0, 0, 0.5);
+  border-color: hsl(210, 100%, 50%);
+  fill: hsla(120, 100%, 25%, 0.8);
+  font-size: clamp(1rem, 2.5vw, 2rem);
+  padding: min(10px, 2rem);
+  margin: max(0px, 1vh);
+  background-image: linear-gradient(to right, red, yellow);
+  safe-area: env(safe-area-inset-top, 20px);
+}
+
+.custom-and-vendor-functions {
+  color: var(--primary-theme-color);
+  fallback-var: var(--accent, #333);
+  vendor-func: -webkit-gradient(linear, left top, left bottom, from(#fff), to(#000));
+  dashed-func: --my-custom-function(arg1, arg2);
+}
+
+.escaped-functions {
+  escaped-name: \66 unc(123);
+  escaped-hyphen: my\-custom\-fn(456);
+  escaped-special: \.special\-fn(789);
+}
+
+.nested-functions {
+  width: calc(
+    100% - var(
+      --sidebar-width,
+      clamp(200px, 20vw, min(400px, calc(50vw - 100px)))
+    )
+  );
+  transform: translate3d(calc(10px + 2vw), scale(1.2), rotate(45deg));
+}

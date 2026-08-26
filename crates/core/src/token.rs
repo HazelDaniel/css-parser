@@ -6,6 +6,9 @@ pub trait Object {}
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum TokenKind {
+/* NOTE: Adding a new TokenKind must require
+    handling it in the exhaustive predicate dispatcher
+    in the integration test */
     // SIMPLE TOKENS
     CURLY_OPEN, CURLY_CLOSE, PAREN_OPEN, PAREN_CLOSE, BRACKET_OPEN,
     BRACKET_CLOSE, SEMICOLON, COMMA, COLON, DOT, PLUS, HYPHEN, STAR,

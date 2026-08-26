@@ -1,0 +1,44 @@
+.basic-strings {
+  content: "Hello, World!";
+  quotes: 'single quoted string';
+  empty-double: "";
+  empty-single: '';
+}
+
+.nested-quotes {
+  content: "String with 'nested single' quotes";
+  font-family: 'Font with "nested double" quotes';
+  escaped-double: "Escaped \"double\" quotes inside";
+  escaped-single: 'Escaped \'single\' quotes inside';
+}
+
+.escaped-characters {
+  content: "Newlines \n and Tabs \t and Backslashes \\";
+  unicode-hex: "Hex escape \000041 BC for letter A";
+  short-hex: 'Short hex \41 B escape';
+  escaped-symbol: "Escaped symbol \@ \$ \% \^ \& \*";
+}
+
+.multiline-string {
+  content: "First line \
+Second line \
+Third line";
+  fallback: 'Line 1 \
+Line 2';
+}
+
+.unicode-strings {
+  content: "Unicode emoji: 🌟 🎉 🚀";
+  multilingual: "Café, naïve, Søren, 北京";
+}
+
+.bad-string-test {
+  content: "bad string with unescaped newline
+";
+  color: red;
+}
+
+.bad-single-string {
+  content: 'bad single string newline
+';
+}

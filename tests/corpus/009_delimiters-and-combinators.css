@@ -1,0 +1,80 @@
+div {
+  color: red;
+  margin: 0, 10px, 20px, 0;
+  font-family: Arial, sans-serif;
+  grid-template: [line1] 100px [line2] / auto;
+}
+
+header > nav {
+  display: block;
+}
+
+h1 + p {
+  margin-top: 0;
+}
+
+p ~ span {
+  color: blue;
+}
+
+ul * {
+  box-sizing: border-box;
+}
+
+a[href] {
+  text-decoration: underline;
+}
+
+input[type="text"] {
+  border: 1px solid #ccc;
+}
+
+[class~="btn"] {
+  padding: 0.5rem 1rem;
+}
+
+[lang|="en"] {
+  font-family: serif;
+}
+
+[href^="https://"] {
+  color: green;
+}
+
+[href$=".pdf"] {
+  background: url(pdf.png);
+}
+
+[src*="thumbnail"] {
+  width: 50px;
+}
+
+svg|rect {
+  fill: blue;
+}
+
+*|div {
+  border: none;
+}
+
+|h1 {
+  font-size: 2rem;
+}
+
+a:hover::before {
+  content: "->";
+}
+
+p::first-letter {
+  font-size: 200%;
+}
+
+.misc-delims {
+  content: !important;
+  query: ?value;
+  slash: 1 / 2;
+  ampersand: & .child;
+  dollar: $var;
+  caret: ^top;
+  tilde: ~next;
+}

@@ -1,0 +1,64 @@
+.integers {
+  zero: 0;
+  positive: 42;
+  explicit-positive: +100;
+  negative: -50;
+  large: 99999999;
+}
+
+.decimals {
+  zero-float: 0.0;
+  pi: 3.14159;
+  leading-dot: .5;
+  positive-leading-dot: +.75;
+  negative-leading-dot: -.25;
+  negative-float: -99.99;
+}
+
+.scientific {
+  exponent: 1e3;
+  uppercase-exponent: 1E3;
+  positive-exponent: 2.5e+4;
+  negative-exponent: 3.14e-2;
+  leading-dot-exponent: .5e2;
+  negative-scientific: -5E-10;
+  zero-exponent: 1e0;
+}
+
+.percentages {
+  zero-percent: 0%;
+  full: 100%;
+  fractional: 50.5%;
+  explicit-positive: +12.5%;
+  negative: -33.33%;
+  leading-dot-percent: .5%;
+  scientific-percent: 1e2%;
+}
+
+.dimensions-standard {
+  length-px: 10px;
+  length-rem: 2.5rem;
+  length-em: 1.2em;
+  viewport-vh: 100vh;
+  viewport-vw: 50vw;
+  angle-deg: 45deg;
+  angle-rad: 3.14rad;
+  time-ms: 100ms;
+  time-s: 2s;
+  frequency-hz: 60Hz;
+  resolution-dpi: 300dpi;
+}
+
+.dimensions-custom {
+  custom-unit: 12grid;
+  negative-custom: -50foo;
+  dashed-unit: 10--bar;
+  escaped-unit: 100\66 oo;
+  hyphen-unit: 5-px;
+}
+
+.dimensions-scientific {
+  large-pixel: 1.2e3px;
+  small-em: 4.5e-2em;
+  percent-dimension: 1e3custom;
+}

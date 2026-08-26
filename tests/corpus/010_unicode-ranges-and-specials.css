@@ -1,0 +1,58 @@
+@font-face {
+  font-family: "LatinSubset";
+  src: url("latin.woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153;
+}
+
+@font-face {
+  font-family: "WildcardSubset";
+  src: url("wildcard.woff2");
+  unicode-range: U+00??, U+06??, U+??????;
+}
+
+@font-face {
+  font-family: "SingleCodePoint";
+  src: url("single.woff2");
+  unicode-range: U+26, u+1f600, u+0020-007e;
+}
+
+li:nth-child(2n+1) {
+  background-color: #f9f9f9;
+}
+
+li:nth-of-type(-n+3) {
+  font-weight: bold;
+}
+
+:is(header, main, footer) > .container {
+  max-width: 1200px;
+}
+
+:not(.active, [disabled]) {
+  cursor: pointer;
+}
+
+:where(.card, .widget):hover {
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+:has(> img) {
+  padding: 0;
+}
+
+.card {
+  background: white;
+
+  & .card-title {
+    font-size: 1.5rem;
+  }
+
+  &:hover {
+    border-color: blue;
+  }
+
+  @media (min-width: 600px) {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

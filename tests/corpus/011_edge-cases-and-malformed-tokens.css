@@ -1,0 +1,28 @@
+
+.sign-edge-cases {
+  plus-plus: ++10;
+  plus-minus: +-20;
+  minus-minus-number: --5;
+  minus-plus: -+15;
+  dot-dot: ..5;
+}
+
+.delimiter-sequences {
+  delims: !!! *** ::: ;;; ::: === >>> <<< +++ ---;
+  slashes: ///;
+  hashes: ###;
+  at-at: @@media;
+}
+
+.ident-lookahead {
+  single-hyphen: -;
+  double-hyphen: --;
+  hyphen-number: -123;
+  hyphen-plus: -+;
+  backslash-alone: \;
+}
+
+.escaped-edge-cases {
+  escaped-newline: \
+  ident;
+}

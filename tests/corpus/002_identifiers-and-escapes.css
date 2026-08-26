@@ -1,0 +1,99 @@
+body {
+  margin: 0;
+}
+
+header-title {
+  display: block;
+}
+
+_internal_state {
+  visibility: hidden;
+}
+
+mainNavigation {
+  position: relative;
+}
+
+:root {
+  --primary-color: #3498db;
+  --font-size-base: 16px;
+  ---triple-dash-identifier: valid;
+  --123-custom-prop-with-digits: active;
+}
+
+-webkit-transform {
+  -moz-box-sizing: border-box;
+  -ms-filter: none;
+}
+
+-identifier {
+  content: "starts with single hyphen";
+}
+
+\#escaped-hash-at-start {
+  color: red;
+}
+
+\.escaped-dot-class {
+  background: white;
+}
+
+\:\:escaped-pseudo {
+  top: 0;
+}
+
+\+escaped-plus {
+  left: 0;
+}
+
+\*escaped-star {
+  right: 0;
+}
+
+\66 oo {
+  color: blue;
+}
+
+\000041 B {
+  display: flex;
+}
+
+\31 23ident {
+  z-index: 10;
+}
+
+identifier\-with\-escaped\-hyphens {
+  grid-row: 1;
+}
+
+escaped\ space\ ident {
+  clear: both;
+}
+
+møller {
+  font-family: sans-serif;
+}
+
+café-latte {
+  color: brown;
+}
+
+æøå-danish {
+  content: "nordic characters";
+}
+
+🚀emoji-identifier {
+  animation: launch 1s;
+}
+
+中文-selector {
+  direction: ltr;
+}
+
+col-12 {
+  width: 100%;
+}
+
+v2_3_final {
+  opacity: 1;
+}

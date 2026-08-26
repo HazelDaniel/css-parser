@@ -1,0 +1,20 @@
+
+<!-- HTML CDO (Comment Diagram Open) Token -->
+
+.container {
+  display: flex; 
+}
+
+--> HTML CDC (Comment Diagram Close) Token
+
+.whitespace-test {
+  tab-space: 	 	value;
+  newline-space:
+    value;
+  crlf-space:
+    value;
+  form-feed-space:    value;
+}
+
+.multiple-spaces     {     margin  :   0   ;   }
+

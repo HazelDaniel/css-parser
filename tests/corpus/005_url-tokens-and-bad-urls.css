@@ -1,0 +1,33 @@
+.valid-unquoted-urls {
+  background-image: url(https://example.com/assets/banner.png);
+  cursor: url(http://example.com/cursor.cur);
+  empty-url: url();
+}
+
+.urls-with-whitespace {
+  src: url(   https://example.com/fonts/inter.woff2   );
+  icon: url(	http://example.com/icon.svg	);
+}
+
+.urls-with-escapes {
+  escaped-parens: url(http://example.com/path\(1\)/file\(2\).png);
+  escaped-spaces: url(http://example.com/path\ with\ spaces/image.jpg);
+  escaped-quotes: url(http://example.com/path\'single\"double.png);
+  escaped-hex: url(http://example.com/\41\42\43.png);
+  escaped-special: url(http://example.com/\;\,\=\?.png);
+}
+
+.quoted-urls {
+  double-quoted: url("https://example.com/image.png");
+  single-quoted: url('https://example.com/image.png');
+  quoted-with-spaces: url(  "https://example.com/spaced.png"  );
+  empty-quoted: url("");
+}
+
+.bad-urls-test {
+  bad-url-space: url(http://example.com/invalid path.png);
+
+  bad-url-quote: url(http://example.com/foo"bar);
+
+  bad-url-paren: url(http://example.com/foo(bar);
+}

@@ -1,0 +1,76 @@
+#header {
+  top: 0;
+}
+
+#main-content_wrapper {
+  margin: 0 auto;
+}
+
+#_private_id {
+  display: none;
+}
+
+#\31 st-item {
+  order: 1;
+}
+
+#café-section {
+  background: white;
+}
+
+#🚀launch-btn {
+  cursor: pointer;
+}
+
+.color-hexes {
+  color-3hex: #f00;
+  color-6hex: #ff0000;
+  color-8hex: #ff000080;
+  numeric-id: #12345;
+  mixed-digits: #1a2b3c;
+  hyphen-digit: #-123;
+}
+
+@media screen and (min-width: 768px) {
+  #header {
+    flex-direction: row;
+  }
+}
+
+@import url("styles.css");
+@charset "UTF-8";
+@namespace svg url("http://www.w3.org/2000/svg");
+
+@font-face {
+  font-family: "CustomFont";
+  src: url("font.woff2");
+}
+
+@keyframes slideIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@-webkit-keyframes fadeIn {
+  from { opacity: 0; }
+}
+
+@supports (display: grid) {
+  .grid-container { display: grid; }
+}
+
+@layer framework, components, utilities;
+
+@container (min-width: 400px) {
+  .card { padding: 2rem; }
+}
+
+@property --my-color {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #c0ffee;
+}
+
+@\6d edia print {
+  body { color: black; }
+}
