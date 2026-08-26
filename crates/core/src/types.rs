@@ -5,5 +5,5 @@ pub trait LocalError {
 }
 
 #[rustfmt::skip]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LexerSpan            (pub usize, pub usize);

@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use crate::types::LexerSpan;
 
 pub trait Object {}
 
@@ -32,16 +32,16 @@ pub enum TokenKind {
 }
 
 #[rustfmt::skip]
-pub struct Token<'a> {
+pub struct Token {
     pub kind:               TokenKind,
     pub line:               usize,
-    pub lexeme:             Cow<'a, str>,
+    pub span:               LexerSpan,
     pub literal:            Option<Box<dyn Object>>
 }
 
 #[rustfmt::skip]
-impl<'a> Token<'a> {
-    pub fn new(kind: TokenKind, line: usize, lexeme: Cow<'a, str>) -> Self {
-        Self { kind, line, lexeme, literal: None }
+impl Token {
+    pub fn new(kind: TokenKind, line: usize, span: LexerSpan) -> Self {
+        Self { kind, line, span, literal: None }
     }
 }

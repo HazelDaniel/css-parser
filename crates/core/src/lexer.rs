@@ -1,7 +1,6 @@
 use crate::errors::{LexerError, LexerErrorReason};
-use crate::types::{LexerSpan};
+use crate::types::LexerSpan;
 use crate::token::{Token, TokenKind};
-use std::borrow::Cow;
 
 #[rustfmt::skip]
 struct Lexer<'a> {
@@ -9,7 +8,7 @@ struct Lexer<'a> {
     start:              usize,
     current:            usize,
     line:               usize,
-    tokens:             Vec<Token<'a>>,
+    tokens:             Vec<Token>,
 
     // optimization
     last_size_memo:     Vec<usize>,
@@ -74,10 +73,10 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn scan(&mut self) -> &[Token<'a>] {
+    pub fn scan(&mut self) -> &[Token] {
         match self.input.chars().next() {
             None => {
-                self.add_token(Token::new(TokenKind::EOF, self.line, Cow::Borrowed("")));
+                self.add_token(Token::new(TokenKind::EOF, self.line, LexerSpan(self.current, self.current)));
                 return &self.tokens[..];
             }
             Some(_) => {
@@ -95,14 +94,18 @@ impl<'a> Lexer<'a> {
                 }
             }
         }
-        self.add_token(Token::new(TokenKind::EOF, self.line, Cow::Borrowed("")));
+        self.add_token(Token::new(TokenKind::EOF, self.line, LexerSpan(self.current, self.current)));
 
         &self.tokens[..]
     }
 
     #[rustfmt::skip]
-    fn add_token(&mut self, token: Token<'a>) {
+    fn add_token(&mut self, token: Token) {
         self.tokens.push(token);
+    }
+
+    fn token(&self, kind: TokenKind) -> Token {
+        Token::new(kind, self.line, LexerSpan(self.start, self.current))
     }
 
     #[rustfmt::skip]
@@ -117,32 +120,28 @@ impl<'a> Lexer<'a> {
                 match cmp {
                     x if utils::is_css_whitespace(x) => { self.whitespace(true)?; },
                     '"' | '\'' => { self.string(true)?; },
-                    '{' => { self.add_token(Token::new(TokenKind::CURLY_OPEN, self.line, Cow::Borrowed("{"))); },
-                    '}' => { self.add_token(Token::new(TokenKind::CURLY_CLOSE, self.line, Cow::Borrowed("}"))); },
-                    '[' => { self.add_token(Token::new(TokenKind::BRACKET_OPEN, self.line, Cow::Borrowed("["))); },
-                    ']' => { self.add_token(Token::new(TokenKind::BRACKET_CLOSE, self.line, Cow::Borrowed("]"))); },
-                    '(' => { self.add_token(Token::new(TokenKind::PAREN_OPEN, self.line, Cow::Borrowed("("))); },
-                    ')' => { self.add_token(Token::new(TokenKind::PAREN_CLOSE, self.line, Cow::Borrowed(")"))); },
-                    ';' => { self.add_token(Token::new(TokenKind::SEMICOLON, self.line, Cow::Borrowed(";"))); },
-                    ':' => { self.add_token(Token::new(TokenKind::COLON, self.line, Cow::Borrowed(":"))); },
-                    ',' => { self.add_token(Token::new(TokenKind::COMMA, self.line, Cow::Borrowed(","))); },
+                    '{' => { self.add_token(self.token(TokenKind::CURLY_OPEN)); },
+                    '}' => { self.add_token(self.token(TokenKind::CURLY_CLOSE)); },
+                    '[' => { self.add_token(self.token(TokenKind::BRACKET_OPEN)); },
+                    ']' => { self.add_token(self.token(TokenKind::BRACKET_CLOSE)); },
+                    '(' => { self.add_token(self.token(TokenKind::PAREN_OPEN)); },
+                    ')' => { self.add_token(self.token(TokenKind::PAREN_CLOSE)); },
+                    ';' => { self.add_token(self.token(TokenKind::SEMICOLON)); },
+                    ':' => { self.add_token(self.token(TokenKind::COLON)); },
+                    ',' => { self.add_token(self.token(TokenKind::COMMA)); },
                     '/' => {
                         if self.peek_next('/') == Some('*') {
                             self.comment()?;
                             return Ok(());
                         }
-                        self.add_token(Token::new(TokenKind::SLASH, self.line, Cow::Borrowed("/")));
+                        self.add_token(self.token(TokenKind::SLASH));
                     },
                     '+' | '.' => {
                         let delimiter = cmp;
                         match self.number(true) {
                             Ok(()) => return Ok(()),
                             Err(e) if e.reason == LexerErrorReason::MATCHED_PREFIX => {
-                                self.add_token(Token::new(
-                                    TokenKind::DELIM(delimiter),
-                                    self.line,
-                                    Cow::Borrowed(""),
-                                ));
+                                self.add_token(self.token(TokenKind::DELIM(delimiter)));
                                 return Ok(());
                             }
                             Err(e) => return Err(e),
@@ -158,11 +157,7 @@ impl<'a> Lexer<'a> {
                         match self.at_keyword(true) {
                             Ok(()) => return Ok(()),
                             Err(e) if e.reason == LexerErrorReason::MATCHED_PREFIX => {
-                                self.add_token(Token::new(
-                                    TokenKind::DELIM('@'),
-                                    self.line,
-                                    Cow::Borrowed(""),
-                                ));
+                                self.add_token(self.token(TokenKind::DELIM('@')));
                                 return Ok(());
                             },
                             Err(e) => return Err(e),
@@ -173,14 +168,14 @@ impl<'a> Lexer<'a> {
                             self.advance();
                             self.advance();
                             self.advance();
-                            self.add_token(Token::new(TokenKind::CDO, self.line, Cow::Borrowed("<!--")));
+                            self.add_token(self.token(TokenKind::CDO));
                             return Ok(());
                         }
 
                         if self.input[self.current..].starts_with("-->") {
                             self.advance();
                             self.advance();
-                            self.add_token(Token::new(TokenKind::CDC, self.line, Cow::Borrowed("-->")));
+                            self.add_token(self.token(TokenKind::CDC));
                             return Ok(());
                         }
 
@@ -210,11 +205,7 @@ impl<'a> Lexer<'a> {
                             match self.number(true) {
                                 Ok(()) => return Ok(()),
                                 Err(e) if e.reason == LexerErrorReason::MATCHED_PREFIX => {
-                                    self.add_token(Token::new(
-                                        TokenKind::DELIM('-'),
-                                        self.line,
-                                        Cow::Borrowed(""),
-                                    ));
+                                    self.add_token(self.token(TokenKind::DELIM('-')));
                                     return Ok(());
                                 }
                                 Err(e) => return Err(e),
@@ -223,7 +214,7 @@ impl<'a> Lexer<'a> {
 
                         if self.input[self.current..].starts_with("!important") {
                             self.current += 9;
-                            self.add_token(Token::new(TokenKind::IMPORTANT_TOKEN, self.line, Cow::Borrowed("!important")));
+                            self.add_token(self.token(TokenKind::IMPORTANT_TOKEN));
                             return Ok(());
                         }
 
@@ -231,17 +222,13 @@ impl<'a> Lexer<'a> {
                             match self.hash(true) {
                                 Ok(()) => { return Ok(()); },
                                 Err(_) => {
-                                    self.add_token(Token::new(TokenKind::DELIM('#'), self.line, Cow::Borrowed("")));
+                                    self.add_token(self.token(TokenKind::DELIM('#')));
                                     return Ok(());
                                 }
                             };
                         }
 
-                        self.add_token(Token::new(
-                            TokenKind::DELIM(identifier),
-                            self.line,
-                            Cow::Borrowed(""),
-                        ));
+                        self.add_token(self.token(TokenKind::DELIM(identifier)));
                         return Ok(());
 
                     }
@@ -354,11 +341,7 @@ impl<'a> Lexer<'a> {
         self.step_back();
 
         if collect {
-            self.add_token(Token::new(
-                TokenKind::FUNCTION,
-                self.line,
-                Cow::Borrowed(""),
-            ));
+            self.add_token(self.token(TokenKind::FUNCTION));
         }
 
         Ok(())
@@ -385,11 +368,7 @@ impl<'a> Lexer<'a> {
         self.ident(false)?;
 
         if collect {
-            self.add_token(Token::new(
-                TokenKind::AT_KEYWORD,
-                self.line,
-                Cow::Borrowed(""),
-            ));
+            self.add_token(self.token(TokenKind::AT_KEYWORD));
         }
 
         Ok(())
@@ -435,9 +414,9 @@ impl<'a> Lexer<'a> {
 
         if collect {
             if id_hash {
-                self.add_token(Token::new(TokenKind::ID_HASH, self.line, Cow::Borrowed("")));
+                self.add_token(self.token(TokenKind::ID_HASH));
             } else {
-                self.add_token(Token::new(TokenKind::GENERIC_HASH, self.line, Cow::Borrowed("")));
+                self.add_token(self.token(TokenKind::GENERIC_HASH));
             }
         }
 
@@ -508,7 +487,7 @@ impl<'a> Lexer<'a> {
         };
 
         if collect {
-            self.add_token(Token::new(kind, self.line, Cow::Borrowed("")));
+            self.add_token(self.token(kind));
         }
 
         Ok(())
@@ -535,13 +514,13 @@ impl<'a> Lexer<'a> {
                 None => {
                     self.step_back();
                     if collect {
-                        self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
+                        self.add_token(self.token(TokenKind::URL));
                     }
                     return Ok(());
                 }
                 Some(')') => {
                     if collect {
-                        self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
+                        self.add_token(self.token(TokenKind::URL));
                     }
                     return Ok(());
                 }
@@ -552,7 +531,7 @@ impl<'a> Lexer<'a> {
                             self.step_back();
                         }
                         if collect {
-                            self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
+                            self.add_token(self.token(TokenKind::URL));
                         }
                         return Ok(());
                     }
@@ -597,7 +576,7 @@ impl<'a> Lexer<'a> {
         while let Some(c) = self.peek() {
             if c == ')' {
                 if collect {
-                    self.add_token(Token::new(TokenKind::BAD_URL, self.line, Cow::Borrowed("")));
+                    self.add_token(self.token(TokenKind::BAD_URL));
                 }
                 return Ok(());
             }
@@ -609,7 +588,7 @@ impl<'a> Lexer<'a> {
 
         self.step_back();
         if collect {
-            self.add_token(Token::new(TokenKind::BAD_URL, self.line, Cow::Borrowed("")));
+            self.add_token(self.token(TokenKind::BAD_URL));
         }
         Ok(())
     }
@@ -749,7 +728,7 @@ impl<'a> Lexer<'a> {
         }
 
         if collect {
-            self.add_token(Token::new(TokenKind::IDENT, self.line, Cow::Borrowed("")));
+            self.add_token(self.token(TokenKind::IDENT));
         }
 
         Ok(())
@@ -779,11 +758,7 @@ impl<'a> Lexer<'a> {
             if self.at_end() {
                 self.step_back();
                 if collect {
-                    self.add_token(Token::new(
-                        TokenKind::BAD_STRING,
-                        self.line,
-                        Cow::Borrowed(""),
-                    ));
+                    self.add_token(self.token(TokenKind::BAD_STRING));
                 }
                 return Ok(());
             }
@@ -802,11 +777,7 @@ impl<'a> Lexer<'a> {
                         if self.at_end() {
                             self.step_back();
                             if collect {
-                                self.add_token(Token::new(
-                                    TokenKind::BAD_STRING,
-                                    self.line,
-                                    Cow::Borrowed(""),
-                                ));
+                                self.add_token(self.token(TokenKind::BAD_STRING));
                             }
                             return Ok(());
                         }
@@ -819,22 +790,14 @@ impl<'a> Lexer<'a> {
                 }
                 Some(x) if x == terminal => {
                     if collect {
-                        self.add_token(Token::new(
-                            TokenKind::STRING,
-                            self.line,
-                            Cow::Borrowed(""),
-                        ));
+                        self.add_token(self.token(TokenKind::STRING));
                     }
                     return Ok(());
                 }
                 Some(x) if self.is_newline(x) => {
                     self.step_back();
                     if collect {
-                        self.add_token(Token::new(
-                            TokenKind::BAD_STRING,
-                            self.line,
-                            Cow::Borrowed(""),
-                        ));
+                        self.add_token(self.token(TokenKind::BAD_STRING));
                     }
                     return Ok(());
                 }
@@ -864,7 +827,7 @@ impl<'a> Lexer<'a> {
             Some(x) if x.is_ascii_digit() => {
                 self.hex_token(false);
                 if collect {
-                    self.add_token(Token::new(TokenKind::ESCAPE, self.line, Cow::Borrowed("")));
+                    self.add_token(self.token(TokenKind::ESCAPE));
                 }
 
                 Ok(())
@@ -880,7 +843,7 @@ impl<'a> Lexer<'a> {
             }
             Some(_) => {
                 if collect {
-                    self.add_token(Token::new(TokenKind::ESCAPE, self.line, Cow::Borrowed("")));
+                    self.add_token(self.token(TokenKind::ESCAPE));
                 }
 
                 Ok(())
@@ -925,11 +888,7 @@ impl<'a> Lexer<'a> {
         }
 
         if collect {
-            self.add_token(Token::new(
-                TokenKind::HEX_TOKEN,
-                self.line,
-                Cow::Borrowed(""),
-            ));
+            self.add_token(self.token(TokenKind::HEX_TOKEN));
         }
 
         Ok(())
@@ -984,11 +943,7 @@ impl<'a> Lexer<'a> {
         if should_align {
             self.step_back();
             if collect {
-                self.add_token(Token::new(
-                    TokenKind::DIGIT_TOKEN,
-                    self.line,
-                    Cow::Borrowed(""),
-                ));
+                self.add_token(self.token(TokenKind::DIGIT_TOKEN));
             }
             return Ok(());
         }
@@ -1020,11 +975,7 @@ impl<'a> Lexer<'a> {
         if should_align {
             self.step_back();
             if collect {
-                self.add_token(Token::new(
-                    TokenKind::WHITESPACE,
-                    self.line,
-                    Cow::Borrowed(""),
-                ));
+                self.add_token(self.token(TokenKind::WHITESPACE));
             }
             return Ok(());
         }
@@ -1580,5 +1531,19 @@ mod tests {
             assert_eq!(lexer.tokens[0].kind, TokenKind::DELIM('#'), "input: {input:?}");
             assert_eq!(lexer.peek(), Some('#'), "input: {input:?}");
         }
+    }
+
+    #[test]
+    fn emitted_tokens_record_cursor_coordinate_spans() {
+        let mut lexer = Lexer::new("éx ");
+
+        assert!(lexer.run().is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::IDENT);
+        assert_eq!(lexer.tokens[0].span, LexerSpan(0, 2));
+
+        lexer.advance();
+        assert!(lexer.run().is_ok());
+        assert_eq!(lexer.tokens[1].kind, TokenKind::WHITESPACE);
+        assert_eq!(lexer.tokens[1].span, LexerSpan(3, 3));
     }
 }
