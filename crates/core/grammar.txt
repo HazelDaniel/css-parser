@@ -1,0 +1,40 @@
+stylesheet
+      ::= rule-list EOF
+
+  rule-list
+      ::= (whitespace | rule)*
+
+  rule
+      ::= at-rule
+       | qualified-rule
+
+  at-rule
+      ::= AT_KEYWORD component-value*
+          (SEMICOLON | simple-block | EOF)
+
+  qualified-rule
+      ::= component-value* simple-block
+
+  component-value
+      ::= preserved-token
+       | simple-block
+       | function
+
+  preserved-token
+      ::= any-token-except-function-or-block-start
+
+  simple-block
+      ::= CURLY_OPEN component-value* CURLY_CLOSE
+       | BRACKET_OPEN component-value* BRACKET_CLOSE
+       | PAREN_OPEN component-value* PAREN_CLOSE
+
+  function
+      ::= FUNCTION component-value* PAREN_CLOSE
+
+  declaration-list
+      ::= (whitespace | SEMICOLON)*
+          (declaration (whitespace | SEMICOLON)*)*
+
+  declaration
+      ::= IDENT COLON component-value*
+
