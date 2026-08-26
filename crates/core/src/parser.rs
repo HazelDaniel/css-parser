@@ -97,6 +97,134 @@ pub struct Function {
     pub closing:        Option<TokenData>,
 }
 
+pub trait Visitor {
+    fn visit_stylesheet(&mut self, stylesheet: &Stylesheet) {
+        walk_stylesheet(self, stylesheet);
+    }
+
+    fn visit_rule(&mut self, rule: &Rule) {
+        walk_rule(self, rule);
+    }
+
+    fn visit_at_rule(&mut self, at_rule: &AtRule) {
+        walk_at_rule(self, at_rule);
+    }
+
+    fn visit_qualified_rule(&mut self, rule: &QualifiedRule) {
+        walk_qualified_rule(self, rule);
+    }
+
+    fn visit_style_block(&mut self, block: &StyleBlock) {
+        walk_style_block(self, block);
+    }
+
+    fn visit_style_block_item(&mut self, item: &StyleBlockItem) {
+        walk_style_block_item(self, item);
+    }
+
+    fn visit_declaration(&mut self, declaration: &Declaration) {
+        walk_declaration(self, declaration);
+    }
+
+    fn visit_component_value(&mut self, value: &ComponentValue) {
+        walk_component_value(self, value);
+    }
+
+    fn visit_simple_block(&mut self, block: &SimpleBlock) {
+        walk_simple_block(self, block);
+    }
+
+    fn visit_function(&mut self, function: &Function) {
+        walk_function(self, function);
+    }
+
+    fn visit_token(&mut self, _token: &TokenData) {}
+}
+
+pub fn walk_stylesheet<V: Visitor + ?Sized>(visitor: &mut V, stylesheet: &Stylesheet) {
+    for rule in &stylesheet.rule_list {
+        visitor.visit_rule(rule);
+    }
+}
+
+pub fn walk_rule<V: Visitor + ?Sized>(visitor: &mut V, rule: &Rule) {
+    match rule {
+        Rule::AT_RULE(at_rule) => visitor.visit_at_rule(at_rule),
+        Rule::QUALIFIED_RULE(rule) => visitor.visit_qualified_rule(rule),
+    }
+}
+
+pub fn walk_at_rule<V: Visitor + ?Sized>(visitor: &mut V, at_rule: &AtRule) {
+    visitor.visit_token(&at_rule.name);
+    for value in &at_rule.prelude {
+        visitor.visit_component_value(value);
+    }
+    if let Some(block) = &at_rule.block {
+        visitor.visit_simple_block(block);
+    }
+}
+
+pub fn walk_qualified_rule<V: Visitor + ?Sized>(visitor: &mut V, rule: &QualifiedRule) {
+    for value in &rule.prelude {
+        visitor.visit_component_value(value);
+    }
+    if let Some(block) = &rule.block {
+        visitor.visit_style_block(block);
+    }
+}
+
+pub fn walk_style_block<V: Visitor + ?Sized>(visitor: &mut V, block: &StyleBlock) {
+    visitor.visit_token(&block.opening);
+    for item in &block.items {
+        visitor.visit_style_block_item(item);
+    }
+    if let Some(closing) = &block.closing {
+        visitor.visit_token(closing);
+    }
+}
+
+pub fn walk_style_block_item<V: Visitor + ?Sized>(visitor: &mut V, item: &StyleBlockItem) {
+    match item {
+        StyleBlockItem::DECLARATION(declaration) => visitor.visit_declaration(declaration),
+        StyleBlockItem::AT_RULE(at_rule) => visitor.visit_at_rule(at_rule),
+    }
+}
+
+pub fn walk_declaration<V: Visitor + ?Sized>(visitor: &mut V, declaration: &Declaration) {
+    visitor.visit_token(&declaration.name);
+    for value in &declaration.value {
+        visitor.visit_component_value(value);
+    }
+}
+
+pub fn walk_component_value<V: Visitor + ?Sized>(visitor: &mut V, value: &ComponentValue) {
+    match value {
+        ComponentValue::PRESERVED(token) => visitor.visit_token(token),
+        ComponentValue::SIMPLE_BLOCK(block) => visitor.visit_simple_block(block),
+        ComponentValue::FUNCTION(function) => visitor.visit_function(function),
+    }
+}
+
+pub fn walk_simple_block<V: Visitor + ?Sized>(visitor: &mut V, block: &SimpleBlock) {
+    visitor.visit_token(&block.opening);
+    for value in &block.values {
+        visitor.visit_component_value(value);
+    }
+    if let Some(closing) = &block.closing {
+        visitor.visit_token(closing);
+    }
+}
+
+pub fn walk_function<V: Visitor + ?Sized>(visitor: &mut V, function: &Function) {
+    visitor.visit_token(&function.name);
+    for value in &function.values {
+        visitor.visit_component_value(value);
+    }
+    if let Some(closing) = &function.closing {
+        visitor.visit_token(closing);
+    }
+}
+
 #[rustfmt::skip]
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -520,6 +648,77 @@ mod tests {
         Token::new(kind, 1, LexerSpan(0, 0))
     }
 
+    #[derive(Default)]
+    struct CountingVisitor {
+        stylesheets: usize,
+        rules: usize,
+        at_rules: usize,
+        qualified_rules: usize,
+        style_blocks: usize,
+        style_block_items: usize,
+        declarations: usize,
+        component_values: usize,
+        simple_blocks: usize,
+        functions: usize,
+        tokens: usize,
+    }
+
+    impl Visitor for CountingVisitor {
+        fn visit_stylesheet(&mut self, stylesheet: &Stylesheet) {
+            self.stylesheets += 1;
+            walk_stylesheet(self, stylesheet);
+        }
+
+        fn visit_rule(&mut self, rule: &Rule) {
+            self.rules += 1;
+            walk_rule(self, rule);
+        }
+
+        fn visit_at_rule(&mut self, at_rule: &AtRule) {
+            self.at_rules += 1;
+            walk_at_rule(self, at_rule);
+        }
+
+        fn visit_qualified_rule(&mut self, rule: &QualifiedRule) {
+            self.qualified_rules += 1;
+            walk_qualified_rule(self, rule);
+        }
+
+        fn visit_style_block(&mut self, block: &StyleBlock) {
+            self.style_blocks += 1;
+            walk_style_block(self, block);
+        }
+
+        fn visit_style_block_item(&mut self, item: &StyleBlockItem) {
+            self.style_block_items += 1;
+            walk_style_block_item(self, item);
+        }
+
+        fn visit_declaration(&mut self, declaration: &Declaration) {
+            self.declarations += 1;
+            walk_declaration(self, declaration);
+        }
+
+        fn visit_component_value(&mut self, value: &ComponentValue) {
+            self.component_values += 1;
+            walk_component_value(self, value);
+        }
+
+        fn visit_simple_block(&mut self, block: &SimpleBlock) {
+            self.simple_blocks += 1;
+            walk_simple_block(self, block);
+        }
+
+        fn visit_function(&mut self, function: &Function) {
+            self.functions += 1;
+            walk_function(self, function);
+        }
+
+        fn visit_token(&mut self, _token: &TokenData) {
+            self.tokens += 1;
+        }
+    }
+
     #[test]
     fn parses_a_qualified_rule_with_a_simple_block() {
         let tokens = vec![
@@ -896,5 +1095,63 @@ mod tests {
             rule.block.as_ref().unwrap().items[0],
             StyleBlockItem::DECLARATION(_)
         ));
+    }
+
+    #[test]
+    fn visitor_walks_each_ast_node_and_token_once() {
+        let data = |kind| TokenData::from(&token(kind));
+        let preserved = ComponentValue::PRESERVED(data(TokenKind::IDENT));
+        let function = ComponentValue::FUNCTION(Function {
+            name: data(TokenKind::FUNCTION),
+            values: vec![preserved.clone()],
+            closing: Some(data(TokenKind::PAREN_CLOSE)),
+        });
+        let value_block = ComponentValue::SIMPLE_BLOCK(SimpleBlock {
+            opening: data(TokenKind::BRACKET_OPEN),
+            values: vec![preserved.clone()],
+            closing: Some(data(TokenKind::BRACKET_CLOSE)),
+        });
+        let declaration = Declaration {
+            name: data(TokenKind::IDENT),
+            value: vec![function, value_block],
+            important: false,
+        };
+        let at_rule = AtRule {
+            name: data(TokenKind::AT_KEYWORD),
+            prelude: vec![preserved.clone()],
+            block: Some(SimpleBlock {
+                opening: data(TokenKind::CURLY_OPEN),
+                values: vec![preserved],
+                closing: Some(data(TokenKind::CURLY_CLOSE)),
+            }),
+        };
+        let stylesheet = Stylesheet {
+            rule_list: vec![Rule::QUALIFIED_RULE(QualifiedRule {
+                prelude: vec![ComponentValue::PRESERVED(data(TokenKind::IDENT))],
+                block: Some(StyleBlock {
+                    opening: data(TokenKind::CURLY_OPEN),
+                    items: vec![
+                        StyleBlockItem::DECLARATION(declaration),
+                        StyleBlockItem::AT_RULE(at_rule),
+                    ],
+                    closing: Some(data(TokenKind::CURLY_CLOSE)),
+                }),
+            })],
+        };
+
+        let mut visitor = CountingVisitor::default();
+        visitor.visit_stylesheet(&stylesheet);
+
+        assert_eq!(visitor.stylesheets, 1);
+        assert_eq!(visitor.rules, 1);
+        assert_eq!(visitor.at_rules, 1);
+        assert_eq!(visitor.qualified_rules, 1);
+        assert_eq!(visitor.style_blocks, 1);
+        assert_eq!(visitor.style_block_items, 2);
+        assert_eq!(visitor.declarations, 1);
+        assert_eq!(visitor.component_values, 7);
+        assert_eq!(visitor.simple_blocks, 2);
+        assert_eq!(visitor.functions, 1);
+        assert_eq!(visitor.tokens, 15);
     }
 }
