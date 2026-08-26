@@ -12,9 +12,10 @@ pub enum ReaderError {
     },
 }
 
+#[rustfmt::skip]
 pub struct Reader<R: Read> {
-    source: Option<R>,
-    cached: Option<Result<String, ReaderError>>,
+    source:             Option<R>,
+    cached:             Option<Result<String, ReaderError>>,
 }
 
 impl<R: Read> Reader<R> {
