@@ -185,17 +185,11 @@ impl<'a> Lexer<'a> {
                             return Ok(());
                         }
 
-                        if self.input[self.current..].starts_with("url") {
-                            self.current += 3;
-                            match self.url(true) {
-                                Ok(res) => { return Ok(res)},
-                                Err(_) => {
-                                    // TODO: backtracking should sync internal state
-                                    self.current -= 3;
-                                }
-                            }
-
-                            return Ok(());
+                        if self.starts_url_function() {
+                            self.advance();
+                            self.advance();
+                            self.advance();
+                            return self.url(true);
                         }
 
                         if self.at_ident_start() {
@@ -552,14 +546,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn url(&mut self, collect: bool) -> Result<(), LexerError> {
-        use utils::is_css_printable;
-
-        let mut should_align = false;
-        let branch_point = self.current;
-        let memo_point = self.last_size_memo.len();
-        let mut current: char;
-
-        if !self.catch_match('(') {
+        if self.peek() != Some('(') {
             return Err(LexerError::new(
                 LexerErrorReason::NO_MATCH,
                 self.line,
@@ -567,101 +554,95 @@ impl<'a> Lexer<'a> {
             ));
         }
 
-        match self.whitespace(false) {
-            Ok(_) => {}
-            Err(_) => {
-                self.backtrack(branch_point, memo_point);
-                if self.at_end() {
-                    return Err(LexerError::new(
-                        LexerErrorReason::UNTERMINATED_TOKEN,
-                        self.line,
-                        LexerSpan (self.start, self.current),
-                    ));
+        self.advance();
+        self.consume_url_whitespace();
+
+        if matches!(self.peek(), Some('"' | '\'')) {
+            return self.consume_bad_url(collect);
+        }
+
+        loop {
+            match self.peek() {
+                None => {
+                    self.step_back();
+                    if collect {
+                        self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
+                    }
+                    return Ok(());
                 }
-                current = self.peek().unwrap();
-                if let Some(next) = self.peek_next(current) {
-                    if next == ')' {
-                        self.advance();
+                Some(')') => {
+                    if collect {
+                        self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
+                    }
+                    return Ok(());
+                }
+                Some(c) if utils::is_css_whitespace(c) => {
+                    self.consume_url_whitespace();
+                    if self.peek() == Some(')') || self.at_end() {
+                        if self.at_end() {
+                            self.step_back();
+                        }
                         if collect {
-                            self.add_token(Token::new(
-                                TokenKind::URL,
-                                self.line,
-                                Cow::Borrowed(""),
-                            ));
+                            self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
                         }
                         return Ok(());
-                    } else {
-                        loop {
-                            if self.at_end() {
-                                break;
-                            }
-                            match self.escape(false) {
-                                Ok(_) => {
-                                    self.advance();
-                                    should_align = true;
-                                }
-                                Err(_) => {
-                                    if let Some(next) = self.peek_next(current) {
-                                        if matches!(next, '"' | '\'' | '(' | '\\')
-                                            || next.is_whitespace()
-                                            || !is_css_printable(next)
-                                        {
-                                            break;
-                                        }
-                                        self.advance();
-                                        should_align = true;
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
                     }
-                } else {
-                    return Err(LexerError::new(
-                        LexerErrorReason::UNTERMINATED_TOKEN,
-                        self.line,
-                        LexerSpan (self.start, self.current),
-                    ));
+                    return self.consume_bad_url(collect);
                 }
+                Some('"' | '\'' | '(') => return self.consume_bad_url(collect),
+                Some('\\') => {
+                    if !self.at_valid_escape() {
+                        return self.consume_bad_url(collect);
+                    }
+                    self.escape(false)?;
+                    self.advance();
+                }
+                Some(c) if !utils::is_css_printable(c) => {
+                    return self.consume_bad_url(collect);
+                }
+                Some(_) => self.advance(),
             }
         }
+    }
 
-        if should_align {
-            self.step_back();
+    fn starts_url_function(&self) -> bool {
+        matches!(self.peek_n(0), Some('u' | 'U'))
+            && matches!(self.peek_n(1), Some('r' | 'R'))
+            && matches!(self.peek_n(2), Some('l' | 'L'))
+            && self.peek_n(3) == Some('(')
+    }
+
+    fn consume_url_whitespace(&mut self) {
+        while let Some(c) = self.peek() {
+            if !utils::is_css_whitespace(c) {
+                break;
+            }
+            if self.is_newline(c) {
+                self.line += 1;
+            }
+            self.advance();
         }
+    }
 
-        if self.whitespace(false).is_ok() {}
-
-        if self.at_end() {
-            return Err(LexerError::new(
-                LexerErrorReason::UNTERMINATED_TOKEN,
-                self.line,
-                LexerSpan (self.start, self.current),
-            ));
-        }
-        current = self.peek().unwrap();
-        if let Some(next) = self.peek_next(current) {
-            if next == ')' {
-                self.advance();
+    fn consume_bad_url(&mut self, collect: bool) -> Result<(), LexerError> {
+        while let Some(c) = self.peek() {
+            if c == ')' {
                 if collect {
-                    self.add_token(Token::new(TokenKind::URL, self.line, Cow::Borrowed("")));
+                    self.add_token(Token::new(TokenKind::BAD_URL, self.line, Cow::Borrowed("")));
                 }
-
                 return Ok(());
             }
-
-            return Err(LexerError::new(
-                LexerErrorReason::UNTERMINATED_TOKEN,
-                self.line,
-                LexerSpan (self.start, self.current),
-            ));
+            if self.is_newline(c) {
+                self.line += 1;
+            }
+            self.advance();
         }
 
-        Err(LexerError::new(
-            LexerErrorReason::UNTERMINATED_TOKEN,
-            self.line,
-            LexerSpan (self.start, self.current),
-        ))
+        self.step_back();
+        if collect {
+            self.add_token(Token::new(TokenKind::BAD_URL, self.line, Cow::Borrowed("")));
+        }
+        Ok(())
     }
 
     fn ident(&mut self, collect: bool) -> Result<(), LexerError> {
@@ -1123,6 +1104,10 @@ impl<'a> Lexer<'a> {
 }
 
 mod utils {
+    pub fn is_css_whitespace(c: char) -> bool {
+        matches!(c, '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | '\u{0020}')
+    }
+
     pub fn is_css_printable(c: char) -> bool {
         !matches!(
             c,
@@ -1363,6 +1348,92 @@ mod tests {
         assert!(unescaped.string(true).is_ok());
         assert_eq!(unescaped.tokens[0].kind, TokenKind::STRING);
         assert_eq!(unescaped.peek(), Some('"'));
+    }
+
+    #[test]
+    fn url_consumer_accepts_printable_content_and_trailing_whitespace() {
+        let mut lexer = Lexer::new("url(foo   )x");
+
+        assert!(lexer.run().is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::URL);
+        assert_eq!(lexer.peek(), Some(')'));
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('x'));
+    }
+
+    #[test]
+    fn url_consumer_accepts_empty_urls_and_valid_escapes() {
+        let mut empty = Lexer::new("url( )");
+        assert!(empty.run().is_ok());
+        assert_eq!(empty.tokens[0].kind, TokenKind::URL);
+        assert_eq!(empty.peek(), Some(')'));
+
+        let mut escaped = Lexer::new("url(foo\\ bar)");
+        assert!(escaped.run().is_ok());
+        assert_eq!(escaped.tokens[0].kind, TokenKind::URL);
+        assert_eq!(escaped.peek(), Some(')'));
+    }
+
+    #[test]
+    fn url_consumer_emits_bad_url_for_invalid_contents() {
+        for input in [
+            "url(\"foo\")",
+            "url(foo(bar))",
+            "url(foo\nbar)",
+            "url(foo\u{0000}bar)",
+            "url(foo bar baz)",
+            "url(foo\\",
+        ] {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.run().is_ok(), "input: {input:?}");
+            assert_eq!(lexer.tokens[0].kind, TokenKind::BAD_URL, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn url_consumer_returns_url_at_eof_after_valid_unquoted_content() {
+        for input in ["url(foo", "url(foo   ", "url(   "] {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.run().is_ok(), "input: {input:?}");
+            assert_eq!(lexer.tokens[0].kind, TokenKind::URL, "input: {input:?}");
+            assert!(lexer.at_end() || lexer.peek().is_some(), "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn url_consumer_accepts_hex_and_non_ascii_escapes() {
+        for input in ["url(\\70 x)", "url(é)", "url(\\é)"] {
+            let mut lexer = Lexer::new(input);
+
+            assert!(lexer.run().is_ok(), "input: {input:?}");
+            assert_eq!(lexer.tokens[0].kind, TokenKind::URL, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn bad_url_consumer_consumes_remnants_through_the_closing_parenthesis() {
+        let mut lexer = Lexer::new("url(\"bad\")next");
+
+        assert!(lexer.run().is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::BAD_URL);
+        assert_eq!(lexer.peek(), Some(')'));
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('n'));
+    }
+
+    #[test]
+    fn url_matching_is_ascii_case_insensitive_but_does_not_match_prefixes() {
+        let mut uppercase = Lexer::new("URL(foo)");
+        assert!(uppercase.run().is_ok());
+        assert_eq!(uppercase.tokens[0].kind, TokenKind::URL);
+
+        let mut prefix = Lexer::new("urlx(foo)");
+        assert!(prefix.run().is_ok());
+        assert_eq!(prefix.tokens[0].kind, TokenKind::FUNCTION);
     }
 
     #[test]
