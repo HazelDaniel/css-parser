@@ -115,7 +115,7 @@ impl<'a> Lexer<'a> {
             None =>  { return Err(LexerError::new(LexerErrorReason::INVARIANT_VIOLATION, self.line, LexerSpan (self.start, self.current))); },
             Some(cmp) => {
                 match cmp {
-                    x if x.is_whitespace() => { self.whitespace(true)?; },
+                    x if utils::is_css_whitespace(x) => { self.whitespace(true)?; },
                     '"' | '\'' => { self.string(true)?; },
                     '{' => { self.add_token(Token::new(TokenKind::CURLY_OPEN, self.line, Cow::Borrowed("{"))); },
                     '}' => { self.add_token(Token::new(TokenKind::CURLY_CLOSE, self.line, Cow::Borrowed("}"))); },
@@ -1038,12 +1038,21 @@ impl<'a> Lexer<'a> {
         let mut should_align = false;
 
         while let Some(x) = self.peek() {
-            if !x.is_whitespace() {
+            if !utils::is_css_whitespace(x) {
                 break;
             }
             should_align = true;
-            self.newline(x, false);
-            self.advance();
+
+            if x == '\r' && self.peek_next('\r') == Some('\n') {
+                self.advance();
+                self.advance();
+                self.line += 1;
+            } else {
+                if self.is_newline(x) {
+                    self.line += 1;
+                }
+                self.advance();
+            }
         }
 
         if should_align {
@@ -1063,50 +1072,6 @@ impl<'a> Lexer<'a> {
             self.line,
             LexerSpan (self.start, self.current),
         ))
-    }
-
-    fn newline(&mut self, x: char, collect: bool) -> bool {
-        let mut dual_seq = false;
-
-        if x == '\r' {
-            if let Some(cmp) = self.peek_next('\r') {
-                if cmp == '\n' {
-                    self.line += 1;
-                    self.advance();
-                    dual_seq = true;
-                }
-                if collect {
-                    self.add_token(Token::new(
-                        TokenKind::WHITESPACE,
-                        self.line,
-                        Cow::Borrowed(""),
-                    ));
-                    return dual_seq;
-                }
-                return dual_seq;
-            }
-            if collect {
-                self.add_token(Token::new(
-                    TokenKind::WHITESPACE,
-                    self.line,
-                    Cow::Borrowed(""),
-                ));
-                return dual_seq;
-            }
-            return dual_seq;
-        } else if x == '\n' && !dual_seq {
-            self.line += 1;
-        }
-
-        if collect {
-            self.add_token(Token::new(
-                TokenKind::WHITESPACE,
-                self.line,
-                Cow::Borrowed(""),
-            ));
-        }
-
-        dual_seq
     }
 }
 
@@ -1180,6 +1145,43 @@ mod tests {
         assert_eq!(lexer.peek(), Some('\t'));
         lexer.advance();
         assert_eq!(lexer.peek(), Some('A'));
+    }
+
+    #[test]
+    fn whitespace_consumer_accepts_only_css_whitespace_code_points() {
+        let mut lexer = Lexer::new("\t\n\u{000C}\r A");
+
+        assert!(lexer.whitespace(true).is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::WHITESPACE);
+        assert_eq!(lexer.peek(), Some(' '));
+        assert_eq!(lexer.line, 4);
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('A'));
+    }
+
+    #[test]
+    fn whitespace_consumer_treats_crlf_as_one_newline() {
+        let mut lexer = Lexer::new(" \r\nX");
+
+        assert!(lexer.whitespace(false).is_ok());
+        assert_eq!(lexer.peek(), Some('\n'));
+        assert_eq!(lexer.line, 2);
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('X'));
+    }
+
+    #[test]
+    fn non_breaking_space_is_not_whitespace_and_starts_an_ident() {
+        let mut lexer = Lexer::new("\u{00A0}x");
+
+        assert!(lexer.run().is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::IDENT);
+        assert_eq!(lexer.peek(), Some('x'));
+
+        lexer.advance();
+        assert!(lexer.at_end());
     }
 
     #[test]
