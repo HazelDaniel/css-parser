@@ -22,7 +22,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn is_newline(&self, cmp: char) -> bool {
-        cmp == '\n' || cmp == '\r' && cmp == '\u{000C}'
+        matches!(cmp, '\n' | '\r' | '\u{000C}')
     }
 
     fn at_end(&self) -> bool {
@@ -806,14 +806,9 @@ impl<'a> Lexer<'a> {
     }
 
     fn string(&mut self, collect: bool) -> Result<(), LexerError> {
-        /*
-            TODO: make this compliant with css spec:
-              - An unescaped newline should terminate the string as a bad string.
-              - Unterminated strings should produce a diagnostic.
-        */
         if self.at_end() {
             return Err(LexerError::new(
-                LexerErrorReason::INVALID_TOKEN,
+                LexerErrorReason::NO_MATCH,
                 self.line,
                 LexerSpan (self.start, self.current),
             ));
@@ -828,73 +823,76 @@ impl<'a> Lexer<'a> {
             ));
         }
 
+        self.advance();
+
         loop {
             if self.at_end() {
-                return Err(LexerError::new(
-                    LexerErrorReason::UNTERMINATED_TOKEN,
-                    self.line,
-                    LexerSpan (self.start, self.current),
-                ));
-            }
-            self.advance();
-
-            match self.peek() {
-                None => {
-                    self.step_back();
-
-                    return Err(LexerError::new(
-                        LexerErrorReason::UNTERMINATED_TOKEN,
+                self.step_back();
+                if collect {
+                    self.add_token(Token::new(
+                        TokenKind::BAD_STRING,
                         self.line,
-                        LexerSpan (self.start, self.current),
+                        Cow::Borrowed(""),
                     ));
                 }
-                Some(x) => {
-                    match x {
-                        c if c == terminal => {
-                            if let Some(lb) = self.lookback() {
-                                if lb == '\\' {
-                                    continue;
-                                } else {
-                                    if collect {
-                                        self.add_token(Token::new(
-                                            TokenKind::STRING,
-                                            self.line,
-                                            Cow::Borrowed(""),
-                                        ));
-                                    }
-                                    return Ok(());
-                                }
-                            } else {
-                                self.step_back();
+                return Ok(());
+            }
 
-                                return Err(LexerError::new(
-                                    LexerErrorReason::INVARIANT_VIOLATION,
+            match self.peek() {
+                Some('\\') => {
+                    let mut backslash_count = 0;
+                    while self.peek() == Some('\\') {
+                        self.advance();
+                        backslash_count += 1;
+                    }
+
+                    // An odd-length run escapes the code point following it;
+                    // an even-length run leaves that code point available to be interpreted normally on the next iteration.
+                    if backslash_count % 2 == 1 {
+                        if self.at_end() {
+                            self.step_back();
+                            if collect {
+                                self.add_token(Token::new(
+                                    TokenKind::BAD_STRING,
                                     self.line,
-                                    LexerSpan (self.start, self.current),
+                                    Cow::Borrowed(""),
                                 ));
-                            } //TODO: edge case. raise invariant violation error
+                            }
+                            return Ok(());
                         }
-                        n if self.is_newline(n) => {
-                            if let Some(lb) = self.lookback() {
-                                if lb == '\\' {
-                                    continue;
-                                } else {
-                                    self.step_back();
 
-                                    return Err(LexerError::new(
-                                        LexerErrorReason::UNTERMINATED_TOKEN,
-                                        self.line,
-                                        LexerSpan (self.start, self.current),
-                                    ));
-                                }
-                            } 
-                            self.line += 1;
+                        if self.peek() == Some('\r') && self.peek_next('\r') == Some('\n') {
+                            self.advance();
                         }
-                        _ => {
-                            continue;
-                        }
+                        self.advance();
                     }
                 }
+                Some(x) if x == terminal => {
+                    if collect {
+                        self.add_token(Token::new(
+                            TokenKind::STRING,
+                            self.line,
+                            Cow::Borrowed(""),
+                        ));
+                    }
+                    return Ok(());
+                }
+                Some(x) if self.is_newline(x) => {
+                    self.step_back();
+                    if collect {
+                        self.add_token(Token::new(
+                            TokenKind::BAD_STRING,
+                            self.line,
+                            Cow::Borrowed(""),
+                        ));
+                    }
+                    return Ok(());
+                }
+                Some(x) if self.is_newline(x) => {
+                    self.advance();
+                }
+                Some(_) => self.advance(),
+                None => unreachable!("at_end was checked above"),
             }
         }
     }
@@ -1304,6 +1302,67 @@ mod tests {
 
         lexer.advance();
         assert_eq!(lexer.peek(), Some(')'));
+    }
+
+    #[test]
+    fn string_consumer_handles_closed_strings() {
+        let mut lexer = Lexer::new("\"hello\"x");
+
+        assert!(lexer.string(true).is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::STRING);
+        assert_eq!(lexer.peek(), Some('"'));
+
+        lexer.advance();
+        assert_eq!(lexer.peek(), Some('x'));
+    }
+
+    #[test]
+    fn string_consumer_emits_bad_string_at_eof() {
+        let mut lexer = Lexer::new("\"unterminated");
+
+        assert!(lexer.string(true).is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::BAD_STRING);
+        assert_eq!(lexer.peek(), Some('d'));
+
+        lexer.advance();
+        assert!(lexer.at_end());
+    }
+
+    #[test]
+    fn string_consumer_emits_bad_string_before_unescaped_newlines() {
+        for newline in ['\n', '\r', '\u{000C}'] {
+            let input = format!("\"before{newline}after");
+            let mut lexer = Lexer::new(&input);
+
+            assert!(lexer.string(true).is_ok());
+            assert_eq!(lexer.tokens[0].kind, TokenKind::BAD_STRING);
+            assert_eq!(lexer.peek(), Some('e'));
+
+            lexer.advance();
+            assert_eq!(lexer.peek(), Some(newline));
+        }
+    }
+
+    #[test]
+    fn string_consumer_accepts_escaped_newlines() {
+        let mut lexer = Lexer::new("\"before\\\nafter\"");
+
+        assert!(lexer.string(true).is_ok());
+        assert_eq!(lexer.tokens[0].kind, TokenKind::STRING);
+        assert_eq!(lexer.peek(), Some('"'));
+    }
+
+    #[test]
+    fn string_consumer_uses_backslash_parity_for_quotes() {
+        let mut escaped = Lexer::new("\"a\\\"b\"");
+        assert!(escaped.string(true).is_ok());
+        assert_eq!(escaped.tokens[0].kind, TokenKind::STRING);
+        assert_eq!(escaped.peek(), Some('"'));
+
+        let mut unescaped = Lexer::new("\"a\\\\\"x");
+        assert!(unescaped.string(true).is_ok());
+        assert_eq!(unescaped.tokens[0].kind, TokenKind::STRING);
+        assert_eq!(unescaped.peek(), Some('"'));
     }
 
     #[test]
