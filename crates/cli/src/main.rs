@@ -1,4 +1,5 @@
 use css_parser_core::lexer::Lexer;
+use css_parser_core::parser::{AstPrinter, Parser};
 use css_parser_core::reader::{Reader, ReaderError};
 use std::env;
 use std::fs::File;
@@ -32,9 +33,16 @@ fn run() -> Result<(), String> {
 
     let mut lexer = Lexer::new(source);
     let tokens = lexer.scan();
+    let mut parser = Parser::new(tokens);
+    let parsed = parser.parse_stylesheet();
 
-    for token in tokens {
-        println!("{:?} {:?}", token.kind, token.span);
+    print!("{}", AstPrinter::render(&parsed.value));
+
+    for error in parsed.errors {
+        eprintln!(
+            "css-parser-cli: parse error: {:?} at line {}, span {:?}",
+            error.reason, error.line, error.span
+        );
     }
 
     Ok(())
