@@ -609,7 +609,10 @@ impl Visitor for AstPrinter {
 
     fn visit_qualified_rule(&mut self, rule: &QualifiedRule) {
         self.enter("QualifiedRule");
-        walk_qualified_rule(self, rule);
+        self.visit_selector_list(&rule.selectors);
+        if let Some(block) = &rule.block {
+            self.visit_style_block(block);
+        }
         self.leave();
     }
 
@@ -1892,5 +1895,24 @@ mod tests {
         assert!(output.contains("      (__ StyleBlock\n"));
         assert!(output.contains("          (__ Declaration (important=false)\n"));
         assert!(output.contains("              (__ Token::NUMBER"));
+    }
+
+    #[test]
+    fn ast_printer_omits_the_raw_qualified_rule_prelude() {
+        let tokens = vec![
+            token(TokenKind::DELIM('.')),
+            token(TokenKind::IDENT),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+        let result = parser.parse_stylesheet();
+
+        let output = AstPrinter::render(&result.value);
+
+        assert!(output.contains("(__ SelectorList\n"));
+        assert!(output.contains("(__ ClassSelector\n"));
+        assert!(!output.contains("(__ ComponentValue::PRESERVED\n"));
     }
 }
