@@ -1,0 +1,89 @@
+# Attribute-selector grammar
+#
+# Based on Selectors Level 4, §16:
+# https://www.w3.org/TR/selectors-4/#grammar
+#
+# These productions are parsed from the contents of one bracketed component
+# value. The outer `[` and `]` are represented by the SIMPLE_BLOCK opening and
+# closing tokens in this project.
+
+attribute-selector
+    ::= BRACKET_OPEN wq-name BRACKET_CLOSE
+     | BRACKET_OPEN wq-name attr-matcher
+         (STRING | IDENT) attr-modifier? BRACKET_CLOSE
+
+attr-matcher
+    ::= (TILDE | PIPE | CARET | DOLLAR | STAR)? EQUALS
+
+attr-modifier
+    ::= IDENT   # The identifier must be `i` or `s`, ASCII case-insensitive.
+
+wq-name
+    ::= ns-prefix? IDENT
+
+ns-prefix
+    ::= (IDENT | STAR)? PIPE
+
+# Examples
+
+[attr]
+[attr="value"]
+[attr=value]
+[attr~="value"]
+[attr|="en"]
+[attr^="data-"]
+[attr$="-value"]
+[attr*="fragment"]
+[attr="value" i]
+[attr="value" s]
+[*|attr]
+[|attr]
+[svg|viewBox]
+
+# Whitespace constraints
+#
+# Whitespace may appear around the selector contents, matcher, value, and
+# modifier. It must not appear between the components of a qualified name or
+# between the components of an attr-matcher.
+#
+# Valid:
+#   [ attr ]
+#   [ attr = "value" i ]
+#
+# Invalid:
+#   [ svg | attr ]       # whitespace splits the qualified name
+#   [ attr ~ = value ]   # whitespace splits the matcher
+
+# Semantic constraints
+#
+# 1. The attribute name is required.
+# 2. A presence selector has no matcher, value, or modifier.
+# 3. A matcher requires exactly one attribute value, which must be STRING or
+#    IDENT.
+# 4. A modifier is optional and must be `i` or `s`, ASCII case-insensitive.
+# 5. A namespace prefix may be an IDENT, STAR, or omitted (`|attr`).
+# 6. An attribute selector must consume exactly one bracketed component value;
+#    malformed contents must not consume neighboring selector components.
+# 7. Namespace declaration and resolution are semantic concerns outside this
+#    grammar. An undeclared namespace prefix can make a selector invalid after
+#    syntactic parsing.
+
+# Project parser contract
+#
+# Input:  one ComponentValue::SIMPLE_BLOCK whose opening token is BRACKET_OPEN
+# Output: AttributeSelector on success
+# Error:  ParseError on malformed contents or a missing closing token
+# Cursor: advances past the complete bracketed component on either success or
+#         failure; it never consumes the following selector component.
+
+# Token mapping
+#
+#   `[` / `]` -> BRACKET_OPEN / BRACKET_CLOSE
+#   `|`       -> PIPE or DELIM('|')
+#   `~`       -> TILDE or DELIM('~')
+#   `^`       -> CARET or DELIM('^')
+#   `$`       -> DOLLAR or DELIM('$')
+#   `*`       -> STAR or DELIM('*')
+#   `=`       -> EQUALS or DELIM('=')
+#   identifier -> IDENT
+#   string     -> STRING

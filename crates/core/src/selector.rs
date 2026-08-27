@@ -305,6 +305,7 @@ impl<'a> SelectorParser<'a> {
     }
 
     fn parse_compound_selector(&mut self) -> Option<CompoundSelector> {
+        let error_count = self.errors.len();
         let type_selector = self.parse_type_selector();
         let mut subclass_selectors = Vec::new();
 
@@ -313,13 +314,15 @@ impl<'a> SelectorParser<'a> {
                 subclass_selectors.push(SubclassSelector::CLASS(class));
             } else if let Some(id) = self.parse_id_selector() {
                 subclass_selectors.push(SubclassSelector::ID(id));
+            } else if let Some(attribute) = self.parse_attribute_selector() {
+                subclass_selectors.push(SubclassSelector::ATTRIBUTE(attribute));
             } else {
                 break;
             }
         }
 
         if type_selector.is_none() && subclass_selectors.is_empty() {
-            self.error(ParseErrorReason::UNEXPECTED_TOKEN);
+            self.error_if_clean(error_count, ParseErrorReason::UNEXPECTED_TOKEN);
             return None;
         }
 
@@ -363,6 +366,43 @@ impl<'a> SelectorParser<'a> {
             _ => return None,
         };
         Some(IdSelector { hash })
+    }
+
+    fn parse_attribute_selector(&mut self) -> Option<AttributeSelector> {
+        let block = match self.values.get(self.current)? {
+            ComponentValue::SIMPLE_BLOCK(block)
+                if block.opening.kind == TokenKind::BRACKET_OPEN =>
+            {
+                block
+            }
+            _ => return None,
+        };
+        let opening = block.opening.clone();
+        let closing = match &block.closing {
+            Some(closing) => closing.clone(),
+            None => {
+                self.error(ParseErrorReason::UNEXPECTED_EOF);
+                self.current += 1;
+                return None;
+            }
+        };
+        let mut parser = AttributeParser::new(&block.values);
+        let attribute = parser.parse().ok();
+        self.current += 1;
+
+        let Some(attribute) = attribute else {
+            self.error(ParseErrorReason::UNEXPECTED_TOKEN);
+            return None;
+        };
+
+        Some(AttributeSelector {
+            opening,
+            name: attribute.name,
+            matcher: attribute.matcher,
+            value: attribute.value,
+            modifier: attribute.modifier,
+            closing,
+        })
     }
 
     fn parse_explicit_combinator(&mut self) -> Option<Combinator> {
@@ -478,9 +518,184 @@ impl<'a> SelectorParser<'a> {
     }
 }
 
+struct ParsedAttribute {
+    name: QualifiedName,
+    matcher: Option<AttributeMatcher>,
+    value: Option<AttributeValue>,
+    modifier: Option<TokenData>,
+}
+
+struct AttributeParser<'a> {
+    values: &'a [ComponentValue],
+    current: usize,
+}
+
+impl<'a> AttributeParser<'a> {
+    fn new(values: &'a [ComponentValue]) -> Self {
+        Self { values, current: 0 }
+    }
+
+    fn parse(&mut self) -> Result<ParsedAttribute, ()> {
+        self.skip_whitespace();
+        let name = self.parse_qualified_name()?;
+        self.skip_whitespace();
+
+        if self.at_end() {
+            return Ok(ParsedAttribute {
+                name,
+                matcher: None,
+                value: None,
+                modifier: None,
+            });
+        }
+
+        let matcher = self.parse_matcher()?;
+        self.skip_whitespace();
+        let value = self.parse_value()?;
+        self.skip_whitespace();
+        let modifier = if self.at_end() {
+            None
+        } else {
+            let modifier = self.consume_token(TokenKind::IDENT)?;
+            self.skip_whitespace();
+            Some(modifier)
+        };
+
+        if !self.at_end() {
+            return Err(());
+        }
+
+        Ok(ParsedAttribute {
+            name,
+            matcher: Some(matcher),
+            value: Some(value),
+            modifier,
+        })
+    }
+
+    fn parse_qualified_name(&mut self) -> Result<QualifiedName, ()> {
+        if self.check_punctuation(TokenKind::PIPE, '|') {
+            let separator = self.consume().ok_or(())?;
+            let name = self.consume_token(TokenKind::IDENT)?;
+            return Ok(QualifiedName {
+                namespace: Some(NamespacePrefix {
+                    prefix: None,
+                    separator,
+                }),
+                name,
+            });
+        }
+
+        let first = self.consume().ok_or(())?;
+        let first_kind = first.kind.clone();
+        if self.check_punctuation(TokenKind::PIPE, '|') {
+            let separator = self.consume().ok_or(())?;
+            let name = self.consume_token(TokenKind::IDENT)?;
+            let prefix = match first_kind {
+                TokenKind::IDENT => NamespaceName::IDENT(first),
+                TokenKind::DELIM('*') => NamespaceName::STAR(first),
+                _ => return Err(()),
+            };
+            return Ok(QualifiedName {
+                namespace: Some(NamespacePrefix {
+                    prefix: Some(prefix),
+                    separator,
+                }),
+                name,
+            });
+        }
+
+        if first_kind != TokenKind::IDENT {
+            return Err(());
+        }
+        Ok(QualifiedName {
+            namespace: None,
+            name: first,
+        })
+    }
+
+    fn parse_matcher(&mut self) -> Result<AttributeMatcher, ()> {
+        let first = self.peek_kind().ok_or(())?;
+        if first == TokenKind::EQUALS || first == TokenKind::DELIM('=') {
+            return Ok(AttributeMatcher {
+                operator: None,
+                equals: self.consume().ok_or(())?,
+            });
+        }
+
+        if !matches!(
+            first,
+            TokenKind::TILDE
+                | TokenKind::PIPE
+                | TokenKind::CARET
+                | TokenKind::DOLLAR
+                | TokenKind::STAR
+                | TokenKind::DELIM('~' | '|' | '^' | '$' | '*')
+        ) {
+            return Err(());
+        }
+        let operator = self.consume().ok_or(())?;
+        let equals = self.consume().ok_or(())?;
+        if equals.kind != TokenKind::EQUALS && equals.kind != TokenKind::DELIM('=') {
+            return Err(());
+        }
+        Ok(AttributeMatcher {
+            operator: Some(operator),
+            equals,
+        })
+    }
+
+    fn parse_value(&mut self) -> Result<AttributeValue, ()> {
+        let token = self.consume().ok_or(())?;
+        match token.kind {
+            TokenKind::STRING => Ok(AttributeValue::STRING(token)),
+            TokenKind::IDENT => Ok(AttributeValue::IDENT(token)),
+            _ => Err(()),
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while self.peek_kind() == Some(TokenKind::WHITESPACE) {
+            self.current += 1;
+        }
+    }
+
+    fn consume_token(&mut self, kind: TokenKind) -> Result<TokenData, ()> {
+        if self.peek_kind() == Some(kind) {
+            return self.consume().ok_or(());
+        }
+        Err(())
+    }
+
+    fn check_punctuation(&self, kind: TokenKind, punctuation: char) -> bool {
+        matches!(self.peek_kind(), Some(current) if current == kind || current == TokenKind::DELIM(punctuation))
+    }
+
+    fn consume(&mut self) -> Option<TokenData> {
+        let value = self.values.get(self.current)?;
+        self.current += 1;
+        match value {
+            ComponentValue::PRESERVED(token) => Some(token.clone()),
+            _ => None,
+        }
+    }
+
+    fn peek_kind(&self) -> Option<TokenKind> {
+        match self.values.get(self.current)? {
+            ComponentValue::PRESERVED(token) => Some(token.kind.clone()),
+            _ => None,
+        }
+    }
+
+    fn at_end(&self) -> bool {
+        self.current >= self.values.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::SimpleBlock;
     use crate::types::LexerSpan;
 
     fn value(kind: TokenKind) -> ComponentValue {
@@ -488,6 +703,22 @@ mod tests {
             kind,
             line: 1,
             span: LexerSpan(0, 0),
+        })
+    }
+
+    fn data(kind: TokenKind) -> TokenData {
+        TokenData {
+            kind,
+            line: 1,
+            span: LexerSpan(0, 0),
+        }
+    }
+
+    fn attribute(values: Vec<ComponentValue>) -> ComponentValue {
+        ComponentValue::SIMPLE_BLOCK(SimpleBlock {
+            opening: data(TokenKind::BRACKET_OPEN),
+            values,
+            closing: Some(data(TokenKind::BRACKET_CLOSE)),
         })
     }
 
@@ -571,5 +802,89 @@ mod tests {
 
         assert_eq!(result.errors.len(), 1);
         assert_eq!(result.value.selectors.len(), 2);
+    }
+
+    #[test]
+    fn parses_attribute_presence_and_value_selectors() {
+        let values = vec![
+            attribute(vec![value(TokenKind::IDENT)]),
+            value(TokenKind::COMMA),
+            attribute(vec![
+                value(TokenKind::IDENT),
+                value(TokenKind::WHITESPACE),
+                value(TokenKind::DELIM('=')),
+                value(TokenKind::WHITESPACE),
+                value(TokenKind::STRING),
+                value(TokenKind::WHITESPACE),
+                value(TokenKind::IDENT),
+            ]),
+        ];
+        let mut parser = SelectorParser::new(&values);
+
+        let result = parser.parse_selector_list();
+
+        assert!(result.errors.is_empty());
+        let selector = &result.value.selectors[0];
+        let compound = selector.components[0].unit.compound.as_ref().unwrap();
+        assert!(matches!(
+            compound.subclass_selectors[0],
+            SubclassSelector::ATTRIBUTE(AttributeSelector {
+                matcher: None,
+                value: None,
+                ..
+            })
+        ));
+        let selector = &result.value.selectors[1];
+        let compound = selector.components[0].unit.compound.as_ref().unwrap();
+        assert!(matches!(
+            compound.subclass_selectors[0],
+            SubclassSelector::ATTRIBUTE(AttributeSelector {
+                matcher: Some(_),
+                value: Some(AttributeValue::STRING(_)),
+                modifier: Some(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_namespaced_attribute_selectors() {
+        let values = vec![attribute(vec![
+            value(TokenKind::IDENT),
+            value(TokenKind::DELIM('|')),
+            value(TokenKind::IDENT),
+        ])];
+        let mut parser = SelectorParser::new(&values);
+
+        let result = parser.parse_selector_list();
+
+        assert!(result.errors.is_empty());
+        let compound = result.value.selectors[0].components[0]
+            .unit
+            .compound
+            .as_ref()
+            .unwrap();
+        let SubclassSelector::ATTRIBUTE(attribute) = &compound.subclass_selectors[0] else {
+            panic!("expected an attribute selector");
+        };
+        assert!(matches!(
+            attribute.name.namespace.as_ref().unwrap().prefix,
+            Some(NamespaceName::IDENT(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_an_unterminated_attribute_selector() {
+        let values = vec![ComponentValue::SIMPLE_BLOCK(SimpleBlock {
+            opening: data(TokenKind::BRACKET_OPEN),
+            values: vec![value(TokenKind::IDENT)],
+            closing: None,
+        })];
+        let mut parser = SelectorParser::new(&values);
+
+        let result = parser.parse_selector_list();
+
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.value.selectors.is_empty());
     }
 }
