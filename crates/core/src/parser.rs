@@ -1,4 +1,11 @@
-use crate::selector::{SelectorList, SelectorParser};
+use crate::selector::{
+    AttributeMatcher, AttributeSelector, AttributeValue, ClassSelector, Combinator,
+    ComplexSelector, ComplexSelectorComponent, ComplexSelectorUnit, CompoundSelector,
+    ForgivingSelectorList, IdSelector, NamespaceName, NamespacePrefix, PseudoClassArguments,
+    PseudoClassSelector, PseudoCompoundSelector, PseudoElementArguments, PseudoElementSelector,
+    QualifiedName, RelativeSelector, RelativeSelectorList, SelectorList, SelectorParser,
+    SubclassSelector, TypeSelector,
+};
 use crate::token::{Token, TokenKind};
 use crate::types::LexerSpan;
 
@@ -140,6 +147,104 @@ pub trait Visitor {
         walk_function(self, function);
     }
 
+    fn visit_selector_list(&mut self, selectors: &SelectorList) {
+        walk_selector_list(self, selectors);
+    }
+
+    fn visit_relative_selector_list(&mut self, selectors: &RelativeSelectorList) {
+        walk_relative_selector_list(self, selectors);
+    }
+
+    fn visit_forgiving_selector_list(&mut self, selectors: &ForgivingSelectorList) {
+        walk_forgiving_selector_list(self, selectors);
+    }
+
+    fn visit_relative_selector(&mut self, selector: &RelativeSelector) {
+        walk_relative_selector(self, selector);
+    }
+
+    fn visit_complex_selector(&mut self, selector: &ComplexSelector) {
+        walk_complex_selector(self, selector);
+    }
+
+    fn visit_complex_selector_component(&mut self, component: &ComplexSelectorComponent) {
+        walk_complex_selector_component(self, component);
+    }
+
+    fn visit_complex_selector_unit(&mut self, unit: &ComplexSelectorUnit) {
+        walk_complex_selector_unit(self, unit);
+    }
+
+    fn visit_compound_selector(&mut self, selector: &CompoundSelector) {
+        walk_compound_selector(self, selector);
+    }
+
+    fn visit_combinator(&mut self, combinator: &Combinator) {
+        walk_combinator(self, combinator);
+    }
+
+    fn visit_type_selector(&mut self, selector: &TypeSelector) {
+        walk_type_selector(self, selector);
+    }
+
+    fn visit_qualified_name(&mut self, name: &QualifiedName) {
+        walk_qualified_name(self, name);
+    }
+
+    fn visit_namespace_prefix(&mut self, prefix: &NamespacePrefix) {
+        walk_namespace_prefix(self, prefix);
+    }
+
+    fn visit_namespace_name(&mut self, name: &NamespaceName) {
+        walk_namespace_name(self, name);
+    }
+
+    fn visit_subclass_selector(&mut self, selector: &SubclassSelector) {
+        walk_subclass_selector(self, selector);
+    }
+
+    fn visit_id_selector(&mut self, selector: &IdSelector) {
+        walk_id_selector(self, selector);
+    }
+
+    fn visit_class_selector(&mut self, selector: &ClassSelector) {
+        walk_class_selector(self, selector);
+    }
+
+    fn visit_attribute_selector(&mut self, selector: &AttributeSelector) {
+        walk_attribute_selector(self, selector);
+    }
+
+    fn visit_attribute_matcher(&mut self, matcher: &AttributeMatcher) {
+        walk_attribute_matcher(self, matcher);
+    }
+
+    fn visit_attribute_value(&mut self, value: &AttributeValue) {
+        walk_attribute_value(self, value);
+    }
+
+    fn visit_pseudo_class_selector(&mut self, selector: &PseudoClassSelector) {
+        walk_pseudo_class_selector(self, selector);
+    }
+
+    fn visit_pseudo_class_arguments(&mut self, arguments: &PseudoClassArguments) {
+        walk_pseudo_class_arguments(self, arguments);
+    }
+
+    fn visit_pseudo_compound_selector(&mut self, selector: &PseudoCompoundSelector) {
+        walk_pseudo_compound_selector(self, selector);
+    }
+
+    fn visit_pseudo_element_selector(&mut self, selector: &PseudoElementSelector) {
+        walk_pseudo_element_selector(self, selector);
+    }
+
+    fn visit_pseudo_element_arguments(&mut self, arguments: &PseudoElementArguments) {
+        walk_pseudo_element_arguments(self, arguments);
+    }
+
+    fn visit_selector_token(&mut self, _token: &TokenData) {}
+
     fn visit_token(&mut self, _token: &TokenData) {}
 }
 
@@ -167,12 +272,228 @@ pub fn walk_at_rule<V: Visitor + ?Sized>(visitor: &mut V, at_rule: &AtRule) {
 }
 
 pub fn walk_qualified_rule<V: Visitor + ?Sized>(visitor: &mut V, rule: &QualifiedRule) {
+    visitor.visit_selector_list(&rule.selectors);
     for value in &rule.prelude {
         visitor.visit_component_value(value);
     }
     if let Some(block) = &rule.block {
         visitor.visit_style_block(block);
     }
+}
+
+pub fn walk_selector_list<V: Visitor + ?Sized>(visitor: &mut V, selectors: &SelectorList) {
+    for selector in &selectors.selectors {
+        visitor.visit_complex_selector(selector);
+    }
+}
+
+pub fn walk_relative_selector_list<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    selectors: &RelativeSelectorList,
+) {
+    for selector in &selectors.selectors {
+        visitor.visit_relative_selector(selector);
+    }
+}
+
+pub fn walk_forgiving_selector_list<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    selectors: &ForgivingSelectorList,
+) {
+    for selector in &selectors.selectors {
+        visitor.visit_complex_selector(selector);
+    }
+}
+
+pub fn walk_relative_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &RelativeSelector) {
+    visitor.visit_complex_selector(&selector.selector);
+}
+
+pub fn walk_complex_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &ComplexSelector) {
+    for component in &selector.components {
+        visitor.visit_complex_selector_component(component);
+    }
+}
+
+pub fn walk_complex_selector_component<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    component: &ComplexSelectorComponent,
+) {
+    if let Some(combinator) = &component.combinator {
+        visitor.visit_combinator(combinator);
+    }
+    visitor.visit_complex_selector_unit(&component.unit);
+}
+
+pub fn walk_complex_selector_unit<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    unit: &ComplexSelectorUnit,
+) {
+    if let Some(compound) = &unit.compound {
+        visitor.visit_compound_selector(compound);
+    }
+    for pseudo_compound in &unit.pseudo_compounds {
+        visitor.visit_pseudo_compound_selector(pseudo_compound);
+    }
+}
+
+pub fn walk_compound_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &CompoundSelector) {
+    if let Some(type_selector) = &selector.type_selector {
+        visitor.visit_type_selector(type_selector);
+    }
+    for subclass_selector in &selector.subclass_selectors {
+        visitor.visit_subclass_selector(subclass_selector);
+    }
+}
+
+pub fn walk_combinator<V: Visitor + ?Sized>(visitor: &mut V, combinator: &Combinator) {
+    match combinator {
+        Combinator::DESCENDANT(token)
+        | Combinator::CHILD(token)
+        | Combinator::NEXT_SIBLING(token)
+        | Combinator::SUBSEQUENT_SIBLING(token) => visitor.visit_selector_token(token),
+        Combinator::COLUMN(first, second) => {
+            visitor.visit_selector_token(first);
+            visitor.visit_selector_token(second);
+        }
+    }
+}
+
+pub fn walk_type_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &TypeSelector) {
+    match selector {
+        TypeSelector::QUALIFIED_NAME(name) => visitor.visit_qualified_name(name),
+        TypeSelector::UNIVERSAL { namespace, star } => {
+            if let Some(namespace) = namespace {
+                visitor.visit_namespace_prefix(namespace);
+            }
+            visitor.visit_selector_token(star);
+        }
+    }
+}
+
+pub fn walk_qualified_name<V: Visitor + ?Sized>(visitor: &mut V, name: &QualifiedName) {
+    if let Some(namespace) = &name.namespace {
+        visitor.visit_namespace_prefix(namespace);
+    }
+    visitor.visit_selector_token(&name.name);
+}
+
+pub fn walk_namespace_prefix<V: Visitor + ?Sized>(visitor: &mut V, prefix: &NamespacePrefix) {
+    if let Some(name) = &prefix.prefix {
+        visitor.visit_namespace_name(name);
+    }
+    visitor.visit_selector_token(&prefix.separator);
+}
+
+pub fn walk_namespace_name<V: Visitor + ?Sized>(visitor: &mut V, name: &NamespaceName) {
+    match name {
+        NamespaceName::IDENT(token) | NamespaceName::STAR(token) => {
+            visitor.visit_selector_token(token)
+        }
+    }
+}
+
+pub fn walk_subclass_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &SubclassSelector) {
+    match selector {
+        SubclassSelector::ID(selector) => visitor.visit_id_selector(selector),
+        SubclassSelector::CLASS(selector) => visitor.visit_class_selector(selector),
+        SubclassSelector::ATTRIBUTE(selector) => visitor.visit_attribute_selector(selector),
+        SubclassSelector::PSEUDO_CLASS(selector) => visitor.visit_pseudo_class_selector(selector),
+    }
+}
+
+pub fn walk_id_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &IdSelector) {
+    visitor.visit_selector_token(&selector.hash);
+}
+
+pub fn walk_class_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &ClassSelector) {
+    visitor.visit_selector_token(&selector.dot);
+    visitor.visit_selector_token(&selector.name);
+}
+
+pub fn walk_attribute_selector<V: Visitor + ?Sized>(visitor: &mut V, selector: &AttributeSelector) {
+    visitor.visit_selector_token(&selector.opening);
+    visitor.visit_qualified_name(&selector.name);
+    if let Some(matcher) = &selector.matcher {
+        visitor.visit_attribute_matcher(matcher);
+    }
+    if let Some(value) = &selector.value {
+        visitor.visit_attribute_value(value);
+    }
+    if let Some(modifier) = &selector.modifier {
+        visitor.visit_selector_token(modifier);
+    }
+    visitor.visit_selector_token(&selector.closing);
+}
+
+pub fn walk_attribute_matcher<V: Visitor + ?Sized>(visitor: &mut V, matcher: &AttributeMatcher) {
+    if let Some(operator) = &matcher.operator {
+        visitor.visit_selector_token(operator);
+    }
+    visitor.visit_selector_token(&matcher.equals);
+}
+
+pub fn walk_attribute_value<V: Visitor + ?Sized>(visitor: &mut V, value: &AttributeValue) {
+    match value {
+        AttributeValue::STRING(token) | AttributeValue::IDENT(token) => {
+            visitor.visit_selector_token(token)
+        }
+    }
+}
+
+pub fn walk_pseudo_class_selector<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    selector: &PseudoClassSelector,
+) {
+    visitor.visit_selector_token(&selector.colon);
+    visitor.visit_selector_token(&selector.name);
+    if let Some(arguments) = &selector.arguments {
+        visitor.visit_pseudo_class_arguments(arguments);
+    }
+}
+
+pub fn walk_pseudo_class_arguments<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    arguments: &PseudoClassArguments,
+) {
+    for value in &arguments.values {
+        visitor.visit_component_value(value);
+    }
+    visitor.visit_selector_token(&arguments.closing);
+}
+
+pub fn walk_pseudo_compound_selector<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    selector: &PseudoCompoundSelector,
+) {
+    visitor.visit_pseudo_element_selector(&selector.pseudo_element);
+    for pseudo_class in &selector.pseudo_classes {
+        visitor.visit_pseudo_class_selector(pseudo_class);
+    }
+}
+
+pub fn walk_pseudo_element_selector<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    selector: &PseudoElementSelector,
+) {
+    visitor.visit_selector_token(&selector.first_colon);
+    if let Some(second_colon) = &selector.second_colon {
+        visitor.visit_selector_token(second_colon);
+    }
+    visitor.visit_selector_token(&selector.name);
+    if let Some(arguments) = &selector.arguments {
+        visitor.visit_pseudo_element_arguments(arguments);
+    }
+}
+
+pub fn walk_pseudo_element_arguments<V: Visitor + ?Sized>(
+    visitor: &mut V,
+    arguments: &PseudoElementArguments,
+) {
+    for value in &arguments.values {
+        visitor.visit_component_value(value);
+    }
+    visitor.visit_selector_token(&arguments.closing);
 }
 
 pub fn walk_style_block<V: Visitor + ?Sized>(visitor: &mut V, block: &StyleBlock) {
@@ -289,6 +610,155 @@ impl Visitor for AstPrinter {
     fn visit_qualified_rule(&mut self, rule: &QualifiedRule) {
         self.enter("QualifiedRule");
         walk_qualified_rule(self, rule);
+        self.leave();
+    }
+
+    fn visit_selector_list(&mut self, selectors: &SelectorList) {
+        self.enter("SelectorList");
+        walk_selector_list(self, selectors);
+        self.leave();
+    }
+
+    fn visit_relative_selector_list(&mut self, selectors: &RelativeSelectorList) {
+        self.enter("RelativeSelectorList");
+        walk_relative_selector_list(self, selectors);
+        self.leave();
+    }
+
+    fn visit_forgiving_selector_list(&mut self, selectors: &ForgivingSelectorList) {
+        self.enter("ForgivingSelectorList");
+        walk_forgiving_selector_list(self, selectors);
+        self.leave();
+    }
+
+    fn visit_relative_selector(&mut self, selector: &RelativeSelector) {
+        self.enter("RelativeSelector");
+        walk_relative_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_complex_selector(&mut self, selector: &ComplexSelector) {
+        self.enter("ComplexSelector");
+        walk_complex_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_complex_selector_component(&mut self, component: &ComplexSelectorComponent) {
+        self.enter("ComplexSelectorComponent");
+        walk_complex_selector_component(self, component);
+        self.leave();
+    }
+
+    fn visit_complex_selector_unit(&mut self, unit: &ComplexSelectorUnit) {
+        self.enter("ComplexSelectorUnit");
+        walk_complex_selector_unit(self, unit);
+        self.leave();
+    }
+
+    fn visit_compound_selector(&mut self, selector: &CompoundSelector) {
+        self.enter("CompoundSelector");
+        walk_compound_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_combinator(&mut self, combinator: &Combinator) {
+        self.enter(format!("Combinator::{:?}", combinator));
+        walk_combinator(self, combinator);
+        self.leave();
+    }
+
+    fn visit_type_selector(&mut self, selector: &TypeSelector) {
+        self.enter(format!("TypeSelector::{:?}", selector));
+        walk_type_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_qualified_name(&mut self, name: &QualifiedName) {
+        self.enter("QualifiedName");
+        walk_qualified_name(self, name);
+        self.leave();
+    }
+
+    fn visit_namespace_prefix(&mut self, prefix: &NamespacePrefix) {
+        self.enter("NamespacePrefix");
+        walk_namespace_prefix(self, prefix);
+        self.leave();
+    }
+
+    fn visit_namespace_name(&mut self, name: &NamespaceName) {
+        self.enter(format!("NamespaceName::{:?}", name));
+        walk_namespace_name(self, name);
+        self.leave();
+    }
+
+    fn visit_subclass_selector(&mut self, selector: &SubclassSelector) {
+        self.enter(format!("SubclassSelector::{:?}", selector));
+        walk_subclass_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_id_selector(&mut self, selector: &IdSelector) {
+        self.enter("IdSelector");
+        walk_id_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_class_selector(&mut self, selector: &ClassSelector) {
+        self.enter("ClassSelector");
+        walk_class_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_attribute_selector(&mut self, selector: &AttributeSelector) {
+        self.enter("AttributeSelector");
+        walk_attribute_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_attribute_matcher(&mut self, matcher: &AttributeMatcher) {
+        self.enter("AttributeMatcher");
+        walk_attribute_matcher(self, matcher);
+        self.leave();
+    }
+
+    fn visit_attribute_value(&mut self, value: &AttributeValue) {
+        self.enter(format!("AttributeValue::{:?}", value));
+        walk_attribute_value(self, value);
+        self.leave();
+    }
+
+    fn visit_pseudo_class_selector(&mut self, selector: &PseudoClassSelector) {
+        self.enter("PseudoClassSelector");
+        walk_pseudo_class_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_pseudo_class_arguments(&mut self, arguments: &PseudoClassArguments) {
+        self.enter("PseudoClassArguments");
+        walk_pseudo_class_arguments(self, arguments);
+        self.leave();
+    }
+
+    fn visit_pseudo_compound_selector(&mut self, selector: &PseudoCompoundSelector) {
+        self.enter("PseudoCompoundSelector");
+        walk_pseudo_compound_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_pseudo_element_selector(&mut self, selector: &PseudoElementSelector) {
+        self.enter("PseudoElementSelector");
+        walk_pseudo_element_selector(self, selector);
+        self.leave();
+    }
+
+    fn visit_pseudo_element_arguments(&mut self, arguments: &PseudoElementArguments) {
+        self.enter("PseudoElementArguments");
+        walk_pseudo_element_arguments(self, arguments);
+        self.leave();
+    }
+
+    fn visit_selector_token(&mut self, token: &TokenData) {
+        self.enter(format!("SelectorToken::{:?}", token.kind));
         self.leave();
     }
 
@@ -1416,6 +1886,9 @@ mod tests {
         assert!(output.starts_with("Stylesheet\n"));
         assert!(output.contains("  (__ Rule::QUALIFIED_RULE\n"));
         assert!(output.contains("    (__ QualifiedRule\n"));
+        assert!(output.contains("      (__ SelectorList\n"));
+        assert!(output.contains("          (__ QualifiedName\n"));
+        assert!(output.contains("              (__ SelectorToken::IDENT\n"));
         assert!(output.contains("      (__ StyleBlock\n"));
         assert!(output.contains("          (__ Declaration (important=false)\n"));
         assert!(output.contains("              (__ Token::NUMBER"));

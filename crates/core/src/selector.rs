@@ -661,11 +661,12 @@ impl<'a> SelectorParser<'a> {
     }
 }
 
+#[rustfmt::skip]
 struct ParsedAttribute {
-    name: QualifiedName,
-    matcher: Option<AttributeMatcher>,
-    value: Option<AttributeValue>,
-    modifier: Option<TokenData>,
+    name:               QualifiedName,
+    matcher:            Option<AttributeMatcher>,
+    value:              Option<AttributeValue>,
+    modifier:           Option<TokenData>,
 }
 
 struct AttributeParser<'a> {
