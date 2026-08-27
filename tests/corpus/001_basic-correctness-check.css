@@ -1,6 +1,6 @@
 .container {
   display: flex;
-  width: 100%;
+  width\: 100%;
   margin: 0 auto;
   padding: 1rem 2rem;
   color: #333;
@@ -8,7 +8,7 @@
 }
 
 .container:hover {
-  opacity: 0.9;
+  opacity\: 0.9 
 }
 
 @media (max-width: 600px) {
