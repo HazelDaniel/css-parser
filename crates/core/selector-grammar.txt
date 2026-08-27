@@ -1,0 +1,157 @@
+# Selector grammar
+#
+# Based on Selectors Level 4, §16:
+# https://www.w3.org/TR/selectors-4/#grammar
+#
+# Notation:
+#   `?`  zero or one
+#   `*`  zero or more
+#   `#`  one or more, comma-separated
+#   `!`  non-empty production
+#
+# The grammar is applied to CSS tokens, not source characters. Whitespace is
+# significant where noted below; it is not allowed inside a compound selector
+# or between the parts of a selector component.
+
+selector-list
+    ::= complex-selector-list
+
+complex-selector-list
+    ::= complex-selector (# complex-selector)*
+
+complex-real-selector-list
+    ::= complex-real-selector (# complex-real-selector)*
+
+compound-selector-list
+    ::= compound-selector (# compound-selector)*
+
+simple-selector-list
+    ::= simple-selector (# simple-selector)*
+
+relative-selector-list
+    ::= relative-selector (# relative-selector)*
+
+relative-real-selector-list
+    ::= relative-real-selector (# relative-real-selector)*
+
+complex-selector
+    ::= complex-selector-unit
+        (combinator? complex-selector-unit)*
+
+complex-selector-unit
+    ::= compound-selector? pseudo-compound-selector* !
+
+complex-real-selector
+    ::= compound-selector
+        (combinator? compound-selector)*
+
+relative-selector
+    ::= combinator? complex-selector
+
+relative-real-selector
+    ::= combinator? complex-real-selector
+
+compound-selector
+    ::= type-selector? subclass-selector* !
+
+pseudo-compound-selector
+    ::= pseudo-element-selector pseudo-class-selector*
+
+simple-selector
+    ::= type-selector
+     | subclass-selector
+
+combinator
+    ::= GREATER_THAN
+     | PLUS
+     | TILDE
+     | PIPE PIPE
+
+wq-name
+    ::= ns-prefix? IDENT
+
+ns-prefix
+    ::= (IDENT | STAR)? PIPE
+
+type-selector
+    ::= wq-name
+     | ns-prefix? STAR
+
+subclass-selector
+    ::= id-selector
+     | class-selector
+     | attribute-selector
+     | pseudo-class-selector
+
+id-selector
+    ::= HASH_TOKEN
+
+class-selector
+    ::= DOT IDENT
+
+attribute-selector
+    ::= BRACKET_OPEN wq-name BRACKET_CLOSE
+     | BRACKET_OPEN wq-name attr-matcher
+         (STRING | IDENT) attr-modifier? BRACKET_CLOSE
+
+attr-matcher
+    ::= (TILDE | PIPE | CARET | DOLLAR | STAR)? EQUALS
+
+attr-modifier
+    ::= IDENT   # `i` or `s`, ASCII case-insensitive
+
+pseudo-class-selector
+    ::= COLON IDENT
+     | COLON FUNCTION any-value PAREN_CLOSE
+
+pseudo-element-selector
+    ::= COLON pseudo-class-selector
+     | COLON legacy-pseudo-element-selector
+
+legacy-pseudo-element-selector
+    ::= IDENT   # before, after, first-line, or first-letter
+
+# Functional pseudo-class arguments
+
+any-value
+    ::= component-value*
+
+forgiving-selector-list
+    ::= any-value?
+
+forgiving-relative-selector-list
+    ::= any-value?
+
+# Whitespace and validity constraints
+#
+# 1. Whitespace is forbidden between the components of a compound-selector or
+#    pseudo-compound-selector, type-selector, class-selector, wq-name,
+#    attr-matcher, and combinator.
+# 2. Whitespace is required between adjacent complex-selector-units when no
+#    explicit combinator is present; it denotes the descendant combinator.
+# 3. The value of an id-selector HASH_TOKEN must be an identifier.
+# 4. A normal style-rule selector list is unforgiving: one invalid selector
+#    invalidates the complete list.
+# 5. Forgiving selector lists are used by :is() and :where(); invalid members
+#    are discarded instead of invalidating the complete list.
+# 6. Pseudo-elements are generally restricted to the final compound selector,
+#    subject to the exceptions defined by the relevant pseudo-element.
+# 7. `:before`, `:after`, `:first-line`, and `:first-letter` are legacy
+#    pseudo-element spellings, not pseudo-classes.
+
+# Project token mapping
+#
+# The CSS grammar names are mapped to this project's TokenKind variants as:
+#   ident-token       -> IDENT
+#   hash-token        -> HASH_TOKEN or ID_HASH (value must be identifier)
+#   function-token    -> FUNCTION
+#   string-token      -> STRING
+#   any-token         -> ComponentValue
+#   '|'               -> PIPE
+#   '||'              -> PIPE PIPE (unless a combined token is added later)
+#   '[' / ']'         -> BRACKET_OPEN / BRACKET_CLOSE
+#   '(' / ')'         -> PAREN_OPEN / PAREN_CLOSE
+#   ':' / '.'         -> COLON / DOT
+#   '>' / '+' / '~'   -> GREATER_THAN / PLUS / TILDE
+#   '='               -> EQUALS
+#   '~=' etc.         -> the corresponding combined TokenKind where emitted
