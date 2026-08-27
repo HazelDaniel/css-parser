@@ -293,13 +293,27 @@ impl<'a> SelectorParser<'a> {
         &mut self,
         combinator: Option<Combinator>,
     ) -> Option<ComplexSelectorComponent> {
-        let compound = self.parse_compound_selector()?;
+        let error_count = self.errors.len();
+        let compound = if self.starts_compound_selector() {
+            self.parse_compound_selector()
+        } else {
+            None
+        };
+        let mut pseudo_compounds = Vec::new();
+        while let Some(pseudo_compound) = self.parse_pseudo_compound_selector() {
+            pseudo_compounds.push(pseudo_compound);
+        }
+
+        if compound.is_none() && pseudo_compounds.is_empty() {
+            self.error_if_clean(error_count, ParseErrorReason::UNEXPECTED_TOKEN);
+            return None;
+        }
 
         Some(ComplexSelectorComponent {
             combinator,
             unit: ComplexSelectorUnit {
-                compound: Some(compound),
-                pseudo_compounds: Vec::new(),
+                compound,
+                pseudo_compounds,
             },
         })
     }
@@ -316,6 +330,8 @@ impl<'a> SelectorParser<'a> {
                 subclass_selectors.push(SubclassSelector::ID(id));
             } else if let Some(attribute) = self.parse_attribute_selector() {
                 subclass_selectors.push(SubclassSelector::ATTRIBUTE(attribute));
+            } else if let Some(pseudo_class) = self.parse_pseudo_class_selector() {
+                subclass_selectors.push(SubclassSelector::PSEUDO_CLASS(pseudo_class));
             } else {
                 break;
             }
@@ -405,6 +421,126 @@ impl<'a> SelectorParser<'a> {
         })
     }
 
+    fn parse_pseudo_class_selector(&mut self) -> Option<PseudoClassSelector> {
+        if !self.check_kind(TokenKind::COLON) || self.peek_kind_at(1) == Some(TokenKind::COLON) {
+            return None;
+        }
+        let colon = self.consume()?;
+
+        match self.values.get(self.current)? {
+            ComponentValue::PRESERVED(token) if token.kind == TokenKind::IDENT => {
+                let name = self.consume()?;
+                Some(PseudoClassSelector {
+                    colon,
+                    name,
+                    arguments: None,
+                })
+            }
+            ComponentValue::FUNCTION(function) => {
+                let function = function.clone();
+                self.current += 1;
+                let closing = match function.closing {
+                    Some(closing) => closing,
+                    None => {
+                        self.error(ParseErrorReason::UNEXPECTED_EOF);
+                        return None;
+                    }
+                };
+                Some(PseudoClassSelector {
+                    colon,
+                    name: function.name.clone(),
+                    arguments: Some(PseudoClassArguments {
+                        values: function.values,
+                        closing,
+                    }),
+                })
+            }
+            _ => {
+                self.error(ParseErrorReason::UNEXPECTED_TOKEN);
+                None
+            }
+        }
+    }
+
+    fn parse_pseudo_compound_selector(&mut self) -> Option<PseudoCompoundSelector> {
+        if self.peek_kind() != Some(TokenKind::COLON)
+            || self.peek_kind_at(1) != Some(TokenKind::COLON)
+        {
+            return None;
+        }
+
+        let pseudo_element = self.parse_pseudo_element_selector()?;
+        let mut pseudo_classes = Vec::new();
+        while let Some(pseudo_class) = self.parse_pseudo_class_selector() {
+            pseudo_classes.push(pseudo_class);
+        }
+
+        Some(PseudoCompoundSelector {
+            pseudo_element,
+            pseudo_classes,
+        })
+    }
+
+    fn parse_pseudo_element_selector(&mut self) -> Option<PseudoElementSelector> {
+        let first_colon = self.consume_token(TokenKind::COLON)?;
+        let second_colon = self.consume_token(TokenKind::COLON)?;
+
+        match self.values.get(self.current)? {
+            ComponentValue::PRESERVED(token) if token.kind == TokenKind::IDENT => {
+                let name = self.consume()?;
+                Some(PseudoElementSelector {
+                    first_colon,
+                    second_colon: Some(second_colon),
+                    name,
+                    arguments: None,
+                })
+            }
+            ComponentValue::FUNCTION(function) => {
+                let function = function.clone();
+                self.current += 1;
+                let closing = match function.closing {
+                    Some(closing) => closing,
+                    None => {
+                        self.error(ParseErrorReason::UNEXPECTED_EOF);
+                        return None;
+                    }
+                };
+                Some(PseudoElementSelector {
+                    first_colon,
+                    second_colon: Some(second_colon),
+                    name: function.name,
+                    arguments: Some(PseudoElementArguments {
+                        values: function.values,
+                        closing,
+                    }),
+                })
+            }
+            _ => {
+                self.error(ParseErrorReason::UNEXPECTED_TOKEN);
+                None
+            }
+        }
+    }
+
+    fn starts_compound_selector(&self) -> bool {
+        if matches!(
+            self.values.get(self.current),
+            Some(ComponentValue::SIMPLE_BLOCK(block))
+                if block.opening.kind == TokenKind::BRACKET_OPEN
+        ) {
+            return true;
+        }
+
+        match self.peek_kind() {
+            Some(TokenKind::IDENT | TokenKind::ID_HASH | TokenKind::HASH_TOKEN) => true,
+            Some(TokenKind::DELIM('.') | TokenKind::DELIM('*')) => true,
+            Some(TokenKind::DOT) => true,
+            Some(TokenKind::BRACKET_OPEN) => true,
+            Some(TokenKind::COLON) => self.peek_kind_at(1) != Some(TokenKind::COLON),
+            _ => false,
+        }
+    }
+
     fn parse_explicit_combinator(&mut self) -> Option<Combinator> {
         let token = self.peek_token()?.clone();
         let combinator = match token.kind {
@@ -489,6 +625,13 @@ impl<'a> SelectorParser<'a> {
 
     fn peek_kind(&self) -> Option<TokenKind> {
         self.peek_token().map(|token| token.kind.clone())
+    }
+
+    fn peek_kind_at(&self, offset: usize) -> Option<TokenKind> {
+        match self.values.get(self.current + offset)? {
+            ComponentValue::PRESERVED(token) => Some(token.kind.clone()),
+            _ => None,
+        }
     }
 
     fn at_end(&self) -> bool {
@@ -722,6 +865,14 @@ mod tests {
         })
     }
 
+    fn function(values: Vec<ComponentValue>) -> ComponentValue {
+        ComponentValue::FUNCTION(crate::parser::Function {
+            name: data(TokenKind::FUNCTION),
+            values,
+            closing: Some(data(TokenKind::PAREN_CLOSE)),
+        })
+    }
+
     #[test]
     fn parses_basic_selector_lists_and_combinators() {
         let values = vec![
@@ -886,5 +1037,59 @@ mod tests {
 
         assert_eq!(result.errors.len(), 1);
         assert!(result.value.selectors.is_empty());
+    }
+
+    #[test]
+    fn parses_simple_and_functional_pseudo_classes() {
+        let values = vec![
+            value(TokenKind::COLON),
+            value(TokenKind::IDENT),
+            value(TokenKind::COLON),
+            function(vec![value(TokenKind::IDENT)]),
+        ];
+        let mut parser = SelectorParser::new(&values);
+
+        let result = parser.parse_selector_list();
+
+        assert!(result.errors.is_empty());
+        let compound = result.value.selectors[0].components[0]
+            .unit
+            .compound
+            .as_ref()
+            .unwrap();
+        assert!(matches!(
+            compound.subclass_selectors[0],
+            SubclassSelector::PSEUDO_CLASS(PseudoClassSelector {
+                arguments: None,
+                ..
+            })
+        ));
+        assert!(matches!(
+            compound.subclass_selectors[1],
+            SubclassSelector::PSEUDO_CLASS(PseudoClassSelector {
+                arguments: Some(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_pseudo_elements_with_following_pseudo_classes() {
+        let values = vec![
+            value(TokenKind::COLON),
+            value(TokenKind::COLON),
+            value(TokenKind::IDENT),
+            value(TokenKind::COLON),
+            value(TokenKind::IDENT),
+        ];
+        let mut parser = SelectorParser::new(&values);
+
+        let result = parser.parse_selector_list();
+
+        assert!(result.errors.is_empty());
+        let unit = &result.value.selectors[0].components[0].unit;
+        assert!(unit.compound.is_none());
+        assert_eq!(unit.pseudo_compounds.len(), 1);
+        assert_eq!(unit.pseudo_compounds[0].pseudo_classes.len(), 1);
     }
 }
