@@ -226,10 +226,11 @@ pub fn walk_function<V: Visitor + ?Sized>(visitor: &mut V, function: &Function) 
 }
 
 /// Renders a stylesheet AST as an indented tree.
+#[rustfmt::skip]
 #[derive(Debug, Default)]
 pub struct AstPrinter {
-    output: String,
-    depth: usize,
+    output:             String,
+    depth:              usize,
 }
 
 impl AstPrinter {
@@ -373,6 +374,13 @@ pub struct Parser<'a> {
     errors:             Vec<ParseError>,
 }
 
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy)]
+struct RecoveryCheckpoint {
+    token_index:                usize,
+    error_index:                usize,
+}
+
 impl<'a> Parser<'a> {
     pub fn new(tokens: &'a [Token]) -> Self {
         Self {
@@ -472,6 +480,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_qualified_rule(&mut self) -> Option<QualifiedRule> {
+        let checkpoint = self.checkpoint();
         let mut prelude = Vec::new();
 
         loop {
@@ -482,7 +491,7 @@ impl<'a> Parser<'a> {
                 });
             }
             if self.check(TokenKind::EOF) {
-                self.error(ParseErrorReason::UNEXPECTED_EOF);
+                self.error_if_clean(checkpoint, ParseErrorReason::UNEXPECTED_EOF);
 
                 return Some(QualifiedRule {
                     prelude,
@@ -498,6 +507,7 @@ impl<'a> Parser<'a> {
 
     fn parse_style_block(&mut self) -> Option<StyleBlock> {
         let opening = self.consume()?;
+        let checkpoint = self.checkpoint();
         let mut items = Vec::new();
 
         loop {
@@ -513,7 +523,7 @@ impl<'a> Parser<'a> {
                     });
                 }
                 Some(TokenKind::EOF) | None => {
-                    self.error(ParseErrorReason::UNEXPECTED_EOF);
+                    self.error_if_clean(checkpoint, ParseErrorReason::UNEXPECTED_EOF);
                     return Some(StyleBlock {
                         opening,
                         items,
@@ -607,24 +617,36 @@ impl<'a> Parser<'a> {
     }
 
     fn synchronize_declaration(&mut self) {
-        while !matches!(
-            self.peek_kind(),
-            Some(TokenKind::SEMICOLON | TokenKind::EOF | TokenKind::CURLY_CLOSE) | None
-        ) {
-            self.current += 1;
-        }
+        self.synchronize_to(&[TokenKind::SEMICOLON, TokenKind::EOF, TokenKind::CURLY_CLOSE]);
 
         self.match_kind(TokenKind::SEMICOLON);
     }
 
     fn synchronize_style_block(&mut self) {
-        while !matches!(
-            self.peek_kind(),
-            Some(TokenKind::SEMICOLON | TokenKind::CURLY_CLOSE | TokenKind::EOF) | None
-        ) {
+        self.synchronize_to(&[TokenKind::SEMICOLON, TokenKind::CURLY_CLOSE, TokenKind::EOF]);
+        self.match_kind(TokenKind::SEMICOLON);
+    }
+
+    fn checkpoint(&self) -> RecoveryCheckpoint {
+        RecoveryCheckpoint {
+            token_index: self.current,
+            error_index: self.errors.len(),
+        }
+    }
+
+    fn error_if_clean(&mut self, checkpoint: RecoveryCheckpoint, reason: ParseErrorReason) {
+        if self.current >= checkpoint.token_index && self.errors.len() == checkpoint.error_index {
+            self.error(reason);
+        }
+    }
+
+    fn synchronize_to(&mut self, boundaries: &[TokenKind]) {
+        while let Some(kind) = self.peek_kind() {
+            if boundaries.contains(&kind) {
+                break;
+            }
             self.current += 1;
         }
-        self.match_kind(TokenKind::SEMICOLON);
     }
 
     fn parse_component_value(&mut self) -> Option<ComponentValue> {
@@ -644,6 +666,7 @@ impl<'a> Parser<'a> {
 
     fn parse_simple_block(&mut self) -> Option<SimpleBlock> {
         let opening = self.consume()?;
+        let checkpoint = self.checkpoint();
         let expected = matching_close(&opening.kind)?;
         let mut values = Vec::new();
 
@@ -656,7 +679,7 @@ impl<'a> Parser<'a> {
         let closing = if self.check(expected) {
             self.consume()
         } else {
-            self.error(ParseErrorReason::UNEXPECTED_EOF);
+            self.error_if_clean(checkpoint, ParseErrorReason::UNEXPECTED_EOF);
             None
         };
 
@@ -669,6 +692,7 @@ impl<'a> Parser<'a> {
 
     fn parse_function(&mut self) -> Option<Function> {
         let name = self.consume()?;
+        let checkpoint = self.checkpoint();
         let mut values = Vec::new();
 
         while !self.check(TokenKind::PAREN_CLOSE) && !self.check(TokenKind::EOF) {
@@ -680,7 +704,7 @@ impl<'a> Parser<'a> {
         let closing = if self.match_kind(TokenKind::PAREN_CLOSE) {
             self.unconsume()
         } else {
-            self.error(ParseErrorReason::UNEXPECTED_EOF);
+            self.error_if_clean(checkpoint, ParseErrorReason::UNEXPECTED_EOF);
             None
         };
 
@@ -766,19 +790,20 @@ mod tests {
         Token::new(kind, 1, LexerSpan(0, 0))
     }
 
+    #[rustfmt::skip]
     #[derive(Default)]
     struct CountingVisitor {
-        stylesheets: usize,
-        rules: usize,
-        at_rules: usize,
-        qualified_rules: usize,
-        style_blocks: usize,
-        style_block_items: usize,
-        declarations: usize,
-        component_values: usize,
-        simple_blocks: usize,
-        functions: usize,
-        tokens: usize,
+        stylesheets:                usize,
+        rules:                      usize,
+        at_rules:                   usize,
+        qualified_rules:            usize,
+        style_blocks:               usize,
+        style_block_items:          usize,
+        declarations:               usize,
+        component_values:           usize,
+        simple_blocks:              usize,
+        functions:                  usize,
+        tokens:                     usize,
     }
 
     impl Visitor for CountingVisitor {
@@ -1170,7 +1195,7 @@ mod tests {
 
         let result = parser.parse_stylesheet();
 
-        assert_eq!(result.errors.len(), 2);
+        assert_eq!(result.errors.len(), 1);
         let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
             panic!("expected a qualified rule");
         };
@@ -1182,6 +1207,32 @@ mod tests {
             panic!("expected a function value");
         };
         assert!(function.closing.is_none());
+    }
+
+    #[test]
+    fn reports_independent_block_errors_separately() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::DELIM('&')),
+            token(TokenKind::SEMICOLON),
+            token(TokenKind::DELIM('%')),
+            token(TokenKind::SEMICOLON),
+            token(TokenKind::IDENT),
+            token(TokenKind::COLON),
+            token(TokenKind::NUMBER),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_stylesheet();
+
+        assert_eq!(result.errors.len(), 2);
+        let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
+            panic!("expected a qualified rule");
+        };
+        assert_eq!(rule.block.as_ref().unwrap().items.len(), 1);
     }
 
     #[test]
