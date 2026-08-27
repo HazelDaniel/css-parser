@@ -1,3 +1,4 @@
+use crate::selector::{SelectorList, SelectorParser};
 use crate::token::{Token, TokenKind};
 use crate::types::LexerSpan;
 
@@ -45,6 +46,7 @@ pub struct AtRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QualifiedRule {
     pub prelude:            Vec<ComponentValue>,
+    pub selectors:          SelectorList,
     pub block:              Option<StyleBlock>,
 }
 
@@ -485,16 +487,20 @@ impl<'a> Parser<'a> {
 
         loop {
             if self.check(TokenKind::CURLY_OPEN) {
+                let selectors = self.parse_qualified_rule_selectors(&prelude);
                 return Some(QualifiedRule {
                     prelude,
+                    selectors,
                     block: self.parse_style_block(),
                 });
             }
             if self.check(TokenKind::EOF) {
                 self.error_if_clean(checkpoint, ParseErrorReason::UNEXPECTED_EOF);
+                let selectors = self.parse_qualified_rule_selectors(&prelude);
 
                 return Some(QualifiedRule {
                     prelude,
+                    selectors,
                     block: None,
                 });
             }
@@ -503,6 +509,12 @@ impl<'a> Parser<'a> {
                 prelude.push(value);
             }
         }
+    }
+
+    fn parse_qualified_rule_selectors(&mut self, prelude: &[ComponentValue]) -> SelectorList {
+        let result = SelectorParser::new(prelude).parse_selector_list();
+        self.errors.extend(result.errors);
+        result.value
     }
 
     fn parse_style_block(&mut self) -> Option<StyleBlock> {
@@ -886,6 +898,64 @@ mod tests {
         assert_eq!(rule.prelude.len(), 1);
         assert!(rule.block.is_some());
         assert_eq!(rule.block.as_ref().unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn parses_selectors_when_constructing_a_qualified_rule() {
+        let tokens = vec![
+            token(TokenKind::DELIM('.')),
+            token(TokenKind::IDENT),
+            token(TokenKind::WHITESPACE),
+            token(TokenKind::DELIM('>')),
+            token(TokenKind::WHITESPACE),
+            token(TokenKind::ID_HASH),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_stylesheet();
+
+        assert!(result.errors.is_empty());
+        let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
+            panic!("expected a qualified rule");
+        };
+        assert_eq!(rule.selectors.selectors.len(), 1);
+        assert_eq!(rule.selectors.selectors[0].components.len(), 2);
+        assert!(matches!(
+            rule.selectors.selectors[0].components[0]
+                .unit
+                .compound
+                .as_ref()
+                .unwrap()
+                .subclass_selectors[0],
+            crate::selector::SubclassSelector::CLASS(_)
+        ));
+        assert!(matches!(
+            rule.selectors.selectors[0].components[1].combinator,
+            Some(crate::selector::Combinator::CHILD(_))
+        ));
+    }
+
+    #[test]
+    fn merges_selector_errors_into_stylesheet_errors() {
+        let tokens = vec![
+            token(TokenKind::IDENT),
+            token(TokenKind::COMMA),
+            token(TokenKind::CURLY_OPEN),
+            token(TokenKind::CURLY_CLOSE),
+            token(TokenKind::EOF),
+        ];
+        let mut parser = Parser::new(&tokens);
+
+        let result = parser.parse_stylesheet();
+
+        assert_eq!(result.errors.len(), 1);
+        let Rule::QUALIFIED_RULE(rule) = &result.value.rule_list[0] else {
+            panic!("expected a qualified rule");
+        };
+        assert_eq!(rule.selectors.selectors.len(), 1);
     }
 
     #[test]
@@ -1297,6 +1367,9 @@ mod tests {
         let stylesheet = Stylesheet {
             rule_list: vec![Rule::QUALIFIED_RULE(QualifiedRule {
                 prelude: vec![ComponentValue::PRESERVED(data(TokenKind::IDENT))],
+                selectors: SelectorList {
+                    selectors: Vec::new(),
+                },
                 block: Some(StyleBlock {
                     opening: data(TokenKind::CURLY_OPEN),
                     items: vec![
