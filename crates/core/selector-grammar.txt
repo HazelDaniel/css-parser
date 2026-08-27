@@ -6,7 +6,9 @@
 # Notation:
 #   `?`  zero or one
 #   `*`  zero or more
-#   `#`  one or more, comma-separated
+#   In the original spec, a trailing `#` means one or more,
+#   comma-separated. The list productions below expand that notation
+#   explicitly using `COMMA`.
 #   `!`  non-empty production
 #
 # The grammar is applied to CSS tokens, not source characters. Whitespace is
@@ -17,22 +19,22 @@ selector-list
     ::= complex-selector-list
 
 complex-selector-list
-    ::= complex-selector (# complex-selector)*
+    ::= complex-selector (COMMA complex-selector)*
 
 complex-real-selector-list
-    ::= complex-real-selector (# complex-real-selector)*
+    ::= complex-real-selector (COMMA complex-real-selector)*
 
 compound-selector-list
-    ::= compound-selector (# compound-selector)*
+    ::= compound-selector (COMMA compound-selector)*
 
 simple-selector-list
-    ::= simple-selector (# simple-selector)*
+    ::= simple-selector (COMMA simple-selector)*
 
 relative-selector-list
-    ::= relative-selector (# relative-selector)*
+    ::= relative-selector (COMMA relative-selector)*
 
 relative-real-selector-list
-    ::= relative-real-selector (# relative-real-selector)*
+    ::= relative-real-selector (COMMA relative-real-selector)*
 
 complex-selector
     ::= complex-selector-unit
