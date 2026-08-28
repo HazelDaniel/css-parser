@@ -12,3 +12,7 @@ categories = ["parser-implementations", "web-programming"]
 [dependencies]
 
 [dev-dependencies]
+
+[[bench]]
+name = "parser"
+harness = false
