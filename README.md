@@ -131,7 +131,7 @@ grammar permits it, and diagnostics are collected for malformed input.
  
 ## Chart
  
-![CSS parser perf benchmark chart](https://github.com/HazelDaniel/css-parser/assets/benchmark_sub.png)
+![CSS parser perf benchmark chart](https://github.com/HazelDaniel/css-parser/blob/master/assets/benchmark_sub.png)
 
 ## Development direction
 
