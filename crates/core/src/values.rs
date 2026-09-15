@@ -1,4 +1,5 @@
 use crate::parser::{ComponentValue, Function, TokenData};
+use crate::resolver::{resolve_variables, VariableResolutionError, VariableResolver};
 use crate::token::TokenKind;
 use crate::types::LexerSpan;
 
@@ -39,6 +40,14 @@ pub struct ExpressionError {
     pub span:   LexerSpan,
 }
 
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ValueExpressionError {
+    VARIABLE(Vec<VariableResolutionError>),
+    EXPRESSION(ExpressionError),
+}
+
 pub fn parse_calc_expression(source: &str, function: &Function) -> Result<Expr, ExpressionError> {
     let mut parser = ExpressionParser {
         source,
@@ -53,6 +62,26 @@ pub fn parse_calc_expression(source: &str, function: &Function) -> Result<Expr, 
     }
 
     Ok(expression)
+}
+
+pub fn parse_calc_expression_with_variables(
+    source: &str,
+    function: &Function,
+    resolver: &dyn VariableResolver,
+) -> Result<Expr, ValueExpressionError> {
+    let values = match resolve_variables(source, &function.values, resolver) {
+        crate::resolver::ResolutionResult::Resolved(values) => values,
+        crate::resolver::ResolutionResult::Invalid(errors) => {
+            return Err(ValueExpressionError::VARIABLE(errors));
+        }
+    };
+
+    let resolved_function = Function {
+        name: function.name.clone(),
+        values,
+        closing: function.closing.clone(),
+    };
+    parse_calc_expression(source, &resolved_function).map_err(ValueExpressionError::EXPRESSION)
 }
 
 struct ExpressionParser<'a> {
@@ -279,9 +308,46 @@ fn number_end(text: &str) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::lexer::Lexer;
-    use crate::parser::{Parser, Rule, StyleBlockItem};
+    use crate::parser::{Declaration, Parser, Rule, StyleBlockItem};
+
+    struct SingleVariable {
+        name: String,
+        value: Vec<ComponentValue>,
+    }
+
+    impl VariableResolver for SingleVariable {
+        fn resolve(&self, name: &str) -> Option<&[ComponentValue]> {
+            (self.name == name).then_some(self.value.as_slice())
+        }
+    }
 
     fn calc_function(source: &str) -> Function {
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.scan();
+        let mut parser = Parser::new(tokens);
+        let stylesheet = parser.parse_stylesheet();
+        assert!(stylesheet.errors.is_empty(), "{:?}", stylesheet.errors);
+
+        for rule in &stylesheet.value.rule_list {
+            let Rule::QUALIFIED_RULE(rule) = rule else {
+                continue;
+            };
+            let Some(block) = &rule.block else {
+                continue;
+            };
+            for item in &block.items {
+                let StyleBlockItem::DECLARATION(declaration) = item else {
+                    continue;
+                };
+                if let Some(ComponentValue::FUNCTION(function)) = declaration.value.first() {
+                    return function.clone();
+                }
+            }
+        }
+        panic!("expected function");
+    }
+
+    fn first_declaration(source: &str) -> Declaration {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.scan();
         let mut parser = Parser::new(tokens);
@@ -295,10 +361,7 @@ mod tests {
         let StyleBlockItem::DECLARATION(declaration) = &block.items[0] else {
             panic!("expected declaration");
         };
-        let ComponentValue::FUNCTION(function) = &declaration.value[0] else {
-            panic!("expected calc function");
-        };
-        function.clone()
+        declaration.clone()
     }
 
     #[test]
@@ -363,5 +426,72 @@ mod tests {
 
         let error = parse_calc_expression(source, &function).unwrap_err();
         assert_eq!(error.reason, ExpressionErrorReason::UNSUPPORTED_FUNCTION);
+    }
+
+    #[test]
+    fn resolves_variables_before_parsing_calc() {
+        let source = ":root{--gap:8px;} .a{width:calc(var(--gap) * 2);} ";
+        let variable = first_declaration(source);
+        let resolver = SingleVariable {
+            name: "--gap".to_string(),
+            value: variable.value,
+        };
+        let function = calc_function(source);
+
+        let expression =
+            parse_calc_expression_with_variables(source, &function, &resolver).unwrap();
+        let Expr::Multiply(left, right) = expression else {
+            panic!("expected multiplication");
+        };
+        let Expr::Literal(left) = *left else {
+            panic!("expected resolved left literal");
+        };
+        let Expr::Literal(right) = *right else {
+            panic!("expected right literal");
+        };
+        assert_eq!(left.value, 8.0);
+        assert_eq!(left.unit.as_deref(), Some("px"));
+        assert_eq!(right.value, 2.0);
+    }
+
+    #[test]
+    fn reports_variable_errors_before_expression_errors() {
+        let source = ".a{width:calc(var(--missing) * 2);} ";
+        let function = calc_function(source);
+        let resolver = SingleVariable {
+            name: "--other".to_string(),
+            value: Vec::new(),
+        };
+
+        let error = parse_calc_expression_with_variables(source, &function, &resolver)
+            .expect_err("missing variable should fail resolution");
+        let ValueExpressionError::VARIABLE(errors) = error else {
+            panic!("expected variable resolution error");
+        };
+        assert_eq!(
+            errors[0].reason,
+            crate::resolver::VariableResolutionErrorReason::MISSING_VARIABLE
+        );
+    }
+
+    #[test]
+    fn resolves_fallback_before_parsing_calc() {
+        let source = ".a{width:calc(var(--missing, 4px) + 2px);} ";
+        let function = calc_function(source);
+        let resolver = SingleVariable {
+            name: "--other".to_string(),
+            value: Vec::new(),
+        };
+
+        let expression =
+            parse_calc_expression_with_variables(source, &function, &resolver).unwrap();
+        let Expr::Add(left, _) = expression else {
+            panic!("expected addition");
+        };
+        let Expr::Literal(left) = *left else {
+            panic!("expected fallback literal");
+        };
+        assert_eq!(left.value, 4.0);
+        assert_eq!(left.unit.as_deref(), Some("px"));
     }
 }
