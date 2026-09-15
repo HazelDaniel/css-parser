@@ -1,12 +1,12 @@
 use crate::parser::ComponentValue;
-use crate::parser::{Function, SimpleBlock, TokenData};
+use crate::parser::{Declaration, Function, SimpleBlock, TokenData};
 use crate::token::TokenKind;
 use crate::types::LexerSpan;
 
 use std::collections::HashSet;
 
 pub trait VariableResolver {
-    // a `VariableResolver` trait so cascade/DOM integrations can provide lookup and inheritance without coupling
+    /// Looks up a custom-property value in the caller-provided environment.
     fn resolve(&self, name: &str) -> Option<&[ComponentValue]>;
 }
 
@@ -51,6 +51,14 @@ pub fn resolve_variables(
     } else {
         ResolutionResult::Invalid(errors)
     }
+}
+
+pub fn resolve_declaration_value(
+    source: &str,
+    declaration: &Declaration,
+    resolver: &dyn VariableResolver,
+) -> ResolutionResult {
+    resolve_variables(source, &declaration.value, resolver)
 }
 
 fn resolve_values(
@@ -312,11 +320,20 @@ mod tests {
     #[test]
     fn substitutes_a_custom_property_and_preserves_the_input() {
         let source = ":root{--gap:8px}.x{width:var(--gap)}";
-        let values = value_of(source);
+        let declaration = declarations(source)
+            .into_iter()
+            .find(|declaration| {
+                declaration
+                    .value
+                    .iter()
+                    .any(|value| matches!(value, ComponentValue::FUNCTION(_)))
+            })
+            .unwrap();
+        let values = declaration.value.clone();
         let original = values.clone();
         let resolver = resolver_for(source);
 
-        let result = resolve_variables(source, &values, &resolver);
+        let result = resolve_declaration_value(source, &declaration, &resolver);
 
         assert_eq!(values, original);
         let ResolutionResult::Resolved(values) = result else {
