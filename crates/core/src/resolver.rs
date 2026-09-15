@@ -220,8 +220,12 @@ fn is_var_function(source: &str, name: &TokenData) -> bool {
 
 fn token_text<'a>(source: &'a str, token: &TokenData) -> Option<&'a str> {
     let LexerSpan(start, cursor) = token.span;
-    let code_point = source.get(cursor..)?.chars().next()?;
-    let end = cursor + code_point.len_utf8();
+    let end = if token.kind == TokenKind::FUNCTION {
+        cursor
+    } else {
+        let code_point = source.get(cursor..)?.chars().next()?;
+        cursor + code_point.len_utf8()
+    };
     source.get(start..end)
 }
 
@@ -235,5 +239,203 @@ fn error(
         line: token.line,
         span: token.span,
         variable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+    use crate::parser::{Declaration, Parser, Rule, StyleBlockItem};
+
+    use std::collections::HashMap;
+
+    struct MapResolver {
+        values: HashMap<String, Vec<ComponentValue>>,
+    }
+
+    impl VariableResolver for MapResolver {
+        fn resolve(&self, name: &str) -> Option<&[ComponentValue]> {
+            self.values.get(name).map(Vec::as_slice)
+        }
+    }
+
+    fn declarations(source: &str) -> Vec<Declaration> {
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.scan();
+        let mut parser = Parser::new(tokens);
+        let result = parser.parse_stylesheet();
+
+        result
+            .value
+            .rule_list
+            .into_iter()
+            .filter_map(|rule| match rule {
+                Rule::QUALIFIED_RULE(rule) => rule.block,
+                Rule::AT_RULE(_) => None,
+            })
+            .flat_map(|block| block.items)
+            .filter_map(|item| match item {
+                StyleBlockItem::DECLARATION(declaration) => Some(declaration),
+                StyleBlockItem::AT_RULE(_) => None,
+            })
+            .collect()
+    }
+
+    fn resolver_for(source: &str) -> MapResolver {
+        let values = declarations(source)
+            .into_iter()
+            .filter_map(|declaration| {
+                let name = declaration.name.span;
+                let LexerSpan(start, cursor) = name;
+                let end = cursor + source[cursor..].chars().next()?.len_utf8();
+                let name = source.get(start..end)?.to_string();
+                name.starts_with("--").then_some((name, declaration.value))
+            })
+            .collect();
+
+        MapResolver { values }
+    }
+
+    fn value_of(source: &str) -> Vec<ComponentValue> {
+        declarations(source)
+            .into_iter()
+            .find(|declaration| {
+                let LexerSpan(start, cursor) = declaration.name.span;
+                let end = cursor + source[cursor..].chars().next().unwrap().len_utf8();
+                source.get(start..end) == Some("width")
+            })
+            .unwrap()
+            .value
+    }
+
+    #[test]
+    fn substitutes_a_custom_property_and_preserves_the_input() {
+        let source = ":root{--gap:8px}.x{width:var(--gap)}";
+        let values = value_of(source);
+        let original = values.clone();
+        let resolver = resolver_for(source);
+
+        let result = resolve_variables(source, &values, &resolver);
+
+        assert_eq!(values, original);
+        let ResolutionResult::Resolved(values) = result else {
+            panic!("expected variable resolution to succeed");
+        };
+        assert!(matches!(
+            values.as_slice(),
+            [ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::DIMENSION,
+                ..
+            })]
+        ));
+    }
+
+    #[test]
+    fn uses_a_fallback_for_a_missing_custom_property() {
+        let source = ".x{width:var(--missing,10px)}";
+        let values = value_of(source);
+        let resolver = resolver_for(source);
+
+        let result = resolve_variables(source, &values, &resolver);
+
+        let ResolutionResult::Resolved(values) = result else {
+            panic!("expected fallback resolution to succeed");
+        };
+        assert!(matches!(
+            values.as_slice(),
+            [ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::DIMENSION,
+                ..
+            })]
+        ));
+    }
+
+    #[test]
+    fn resolves_variables_inside_functions() {
+        let source = ":root{--gap:8px}.x{width:calc(var(--gap)*2)}";
+        let values = value_of(source);
+        let resolver = resolver_for(source);
+
+        let result = resolve_variables(source, &values, &resolver);
+
+        let ResolutionResult::Resolved(values) = result else {
+            panic!("expected a resolved calc function");
+        };
+        let [ComponentValue::FUNCTION(function)] = values.as_slice() else {
+            panic!("expected a resolved calc function");
+        };
+        assert!(matches!(
+            function.values.as_slice(),
+            [
+                ComponentValue::PRESERVED(TokenData {
+                    kind: TokenKind::DIMENSION,
+                    ..
+                }),
+                ComponentValue::PRESERVED(TokenData {
+                    kind: TokenKind::DELIM('*'),
+                    ..
+                }),
+                ComponentValue::PRESERVED(TokenData {
+                    kind: TokenKind::NUMBER,
+                    ..
+                }),
+            ]
+        ));
+    }
+
+    #[test]
+    fn reports_missing_variables_without_fallbacks() {
+        let source = ".x{width:var(--missing)}";
+        let values = value_of(source);
+        let resolver = resolver_for(source);
+
+        let ResolutionResult::Invalid(errors) = resolve_variables(source, &values, &resolver)
+        else {
+            panic!("expected missing variable to fail resolution");
+        };
+        assert!(matches!(
+            errors.as_slice(),
+            [VariableResolutionError {
+                reason: VariableResolutionErrorReason::MISSING_VARIABLE,
+                variable: Some(name),
+                ..
+            }] if name == "--missing"
+        ));
+    }
+
+    #[test]
+    fn reports_variable_cycles() {
+        let source = ":root{--a:var(--b);--b:var(--a)}.x{width:var(--a)}";
+        let values = value_of(source);
+        let resolver = resolver_for(source);
+
+        let ResolutionResult::Invalid(errors) = resolve_variables(source, &values, &resolver)
+        else {
+            panic!("expected a variable cycle to fail resolution");
+        };
+        assert!(errors.iter().any(|error| {
+            error.reason == VariableResolutionErrorReason::CYCLE
+                && error.variable.as_deref() == Some("--a")
+        }));
+    }
+
+    #[test]
+    fn rejects_non_custom_property_variable_names() {
+        let source = ".x{width:var(gap,10px)}";
+        let values = value_of(source);
+        let resolver = resolver_for(source);
+
+        let ResolutionResult::Invalid(errors) = resolve_variables(source, &values, &resolver)
+        else {
+            panic!("expected an invalid variable name");
+        };
+        assert!(matches!(
+            errors.as_slice(),
+            [VariableResolutionError {
+                reason: VariableResolutionErrorReason::INVALID_NAME,
+                ..
+            }]
+        ));
     }
 }
