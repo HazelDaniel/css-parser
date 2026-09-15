@@ -132,7 +132,7 @@ fn resolve_var_function(
     active: &mut HashSet<String>,
     errors: &mut Vec<VariableResolutionError>,
 ) -> Vec<ComponentValue> {
-    let Some(closing) = &function.closing else {
+    if !(&function.closing.is_some()) {
         errors.push(error(
             VariableResolutionErrorReason::INVALID_FUNCTION,
             &function.name,
@@ -141,7 +141,6 @@ fn resolve_var_function(
         return Vec::new();
     };
 
-    let _ = closing;
     let (name_values, fallback_values) = split_var_arguments(&function.values);
     let Some(name) = variable_name(source, name_values) else {
         errors.push(error(
@@ -214,6 +213,7 @@ fn variable_name(source: &str, values: &[ComponentValue]) -> Option<String> {
     let ComponentValue::PRESERVED(token) = values.next()? else {
         return None;
     };
+
     if token.kind != TokenKind::IDENT || values.next().is_some() {
         return None;
     }

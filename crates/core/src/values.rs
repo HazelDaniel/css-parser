@@ -17,9 +17,9 @@ pub enum Expr {
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 pub struct NumericLiteral {
-    pub value:     f64,
-    pub unit:      Option<String>,
-    pub span:      LexerSpan,
+    pub value:        f64,
+    pub unit:         Option<String>,
+    pub span:         LexerSpan,
 }
 
 #[rustfmt::skip]
@@ -35,9 +35,9 @@ pub enum ExpressionErrorReason {
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpressionError {
-    pub reason: ExpressionErrorReason,
-    pub line:   usize,
-    pub span:   LexerSpan,
+    pub reason:             ExpressionErrorReason,
+    pub line:               usize,
+    pub span:               LexerSpan,
 }
 
 #[rustfmt::skip]

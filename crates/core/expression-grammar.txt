@@ -1,0 +1,51 @@
+CSS Expression Grammar
+======================
+
+This grammar describes the expression subset currently implemented by the
+values parser. Whitespace may occur between any two components unless stated
+otherwise.
+
+expression
+    ::= additive-expression
+
+additive-expression
+    ::= multiplicative-expression
+        ((PLUS | MINUS) multiplicative-expression)*
+
+multiplicative-expression
+    ::= primary-expression
+        ((STAR | SLASH) primary-expression)*
+
+primary-expression
+    ::= NUMBER
+      | PERCENTAGE
+      | DIMENSION
+      | parenthesized-expression
+
+parenthesized-expression
+    ::= PAREN_OPEN expression PAREN_CLOSE
+
+
+Operator precedence
+-------------------
+
+1. Parenthesized expressions
+2. Multiplication and division
+3. Addition and subtraction
+
+Operators at the same precedence level associate from left to right.
+
+
+Supported value forms
+---------------------
+
+- Numeric literals
+- Percentages
+- Dimensions with units
+- Parenthesized expressions
+- The operators +, -, *, and /
+- var() substitution before expression parsing
+
+Nested functions other than var() are not currently accepted as expression
+primaries. Functions such as min(), max(), and clamp() are therefore outside
+this grammar until explicitly implemented.
