@@ -15,6 +15,14 @@ pub enum Expr {
 }
 
 #[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NumericType {
+    Number,
+    Percentage,
+    Dimension(String),
+}
+
+#[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 pub struct NumericLiteral {
     pub value:        f64,
@@ -46,6 +54,21 @@ pub struct ExpressionError {
 pub enum ValueExpressionError {
     VARIABLE(Vec<VariableResolutionError>),
     EXPRESSION(ExpressionError),
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum SemanticErrorReason {
+    INCOMPATIBLE_ADDITION,
+    INVALID_MULTIPLICATION,
+    INVALID_DIVISION,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticError {
+    pub reason: SemanticErrorReason,
 }
 
 pub fn parse_calc_expression(source: &str, function: &Function) -> Result<Expr, ExpressionError> {
@@ -82,6 +105,48 @@ pub fn parse_calc_expression_with_variables(
         closing: function.closing.clone(),
     };
     parse_calc_expression(source, &resolved_function).map_err(ValueExpressionError::EXPRESSION)
+}
+
+pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticError> {
+    match expression {
+        Expr::Literal(literal) => Ok(match &literal.unit {
+            None => NumericType::Number,
+            Some(unit) if unit == "%" => NumericType::Percentage,
+            Some(unit) => NumericType::Dimension(dimension_category(unit)),
+        }),
+        Expr::Group(expression) => analyze_expression(expression),
+        Expr::Add(left, right) | Expr::Subtract(left, right) => {
+            let left_type = analyze_expression(left)?;
+            let right_type = analyze_expression(right)?;
+            if left_type == right_type {
+                Ok(left_type)
+            } else {
+                Err(SemanticError {
+                    reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
+                })
+            }
+        }
+        Expr::Multiply(left, right) => {
+            let left_type = analyze_expression(left)?;
+            let right_type = analyze_expression(right)?;
+            match (left_type, right_type) {
+                (NumericType::Number, value) | (value, NumericType::Number) => Ok(value),
+                _ => Err(SemanticError {
+                    reason: SemanticErrorReason::INVALID_MULTIPLICATION,
+                }),
+            }
+        }
+        Expr::Divide(left, right) => {
+            let left_type = analyze_expression(left)?;
+            let right_type = analyze_expression(right)?;
+            match (left_type, right_type) {
+                (value, NumericType::Number) => Ok(value),
+                _ => Err(SemanticError {
+                    reason: SemanticErrorReason::INVALID_DIVISION,
+                }),
+            }
+        }
+    }
 }
 
 struct ExpressionParser<'a> {
@@ -304,6 +369,53 @@ fn number_end(text: &str) -> Option<usize> {
     (index > 0).then_some(index)
 }
 
+fn dimension_category(unit: &str) -> String {
+    let unit = unit.to_ascii_lowercase();
+    let category = if matches!(
+        unit.as_str(),
+        "cap"
+            | "ch"
+            | "cm"
+            | "em"
+            | "ex"
+            | "ic"
+            | "in"
+            | "lh"
+            | "mm"
+            | "pc"
+            | "pt"
+            | "px"
+            | "q"
+            | "rem"
+            | "rlh"
+            | "vh"
+            | "vmax"
+            | "vmin"
+            | "vw"
+            | "dvh"
+            | "dvw"
+            | "lvh"
+            | "lvw"
+            | "svh"
+            | "svw"
+    ) {
+        "length"
+    } else if matches!(unit.as_str(), "deg" | "grad" | "rad" | "turn") {
+        "angle"
+    } else if matches!(unit.as_str(), "ms" | "s") {
+        "time"
+    } else if matches!(unit.as_str(), "hz" | "khz") {
+        "frequency"
+    } else if matches!(unit.as_str(), "dpi" | "dpcm" | "dppx" | "x") {
+        "resolution"
+    } else if unit == "fr" {
+        "flex"
+    } else {
+        return format!("unit:{unit}");
+    };
+    category.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,6 +520,72 @@ mod tests {
         assert_eq!(right.unit.as_deref(), Some("%"));
         assert_eq!(&source[left.span.0..=left.span.1], "1.5rem");
         assert_eq!(&source[right.span.0..=right.span.1], "20%");
+    }
+
+    #[test]
+    fn analyzes_valid_numeric_operations() {
+        let source = ".a{width:calc(2 * 3px + 1px);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert_eq!(
+            analyze_expression(&expression),
+            Ok(NumericType::Dimension("length".to_string()))
+        );
+    }
+
+    #[test]
+    fn accepts_addition_of_compatible_dimensions() {
+        let source = ".a{width:calc(1px + 1rem);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert_eq!(
+            analyze_expression(&expression),
+            Ok(NumericType::Dimension("length".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_addition_of_number_and_dimension() {
+        let source = ".a{width:calc(1 + 1px);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert_eq!(
+            analyze_expression(&expression),
+            Err(SemanticError {
+                reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_multiplication_of_two_dimensions() {
+        let source = ".a{width:calc(2px * 3px);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert_eq!(
+            analyze_expression(&expression),
+            Err(SemanticError {
+                reason: SemanticErrorReason::INVALID_MULTIPLICATION,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_division_by_a_dimension() {
+        let source = ".a{width:calc(2px / 3px);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert_eq!(
+            analyze_expression(&expression),
+            Err(SemanticError {
+                reason: SemanticErrorReason::INVALID_DIVISION,
+            })
+        );
     }
 
     #[test]
