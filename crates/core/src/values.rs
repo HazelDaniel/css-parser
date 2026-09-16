@@ -12,6 +12,13 @@ pub enum Expr {
     Multiply(Box<Expr>, Box<Expr>),
     Divide(Box<Expr>, Box<Expr>),
     Group(Box<Expr>),
+    Min(Vec<Expr>),
+    Max(Vec<Expr>),
+    Clamp {
+        min:   Box<Expr>,
+        value: Box<Expr>,
+        max:   Box<Expr>,
+    },
 }
 
 #[rustfmt::skip]
@@ -38,6 +45,8 @@ pub enum ExpressionErrorReason {
     UNEXPECTED_EOF,
     INVALID_NUMBER,
     UNSUPPORTED_FUNCTION,
+    INVALID_ARGUMENT_COUNT,
+    EMPTY_ARGUMENT,
 }
 
 #[rustfmt::skip]
@@ -146,13 +155,37 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
                 }),
             }
         }
+        Expr::Min(arguments) | Expr::Max(arguments) => analyze_same_type(arguments.iter()),
+        Expr::Clamp { min, value, max } => {
+            analyze_same_type([min.as_ref(), value.as_ref(), max.as_ref()].into_iter())
+        }
     }
 }
 
+fn analyze_same_type<'a>(
+    mut expressions: impl Iterator<Item = &'a Expr>,
+) -> Result<NumericType, SemanticError> {
+    let Some(first) = expressions.next() else {
+        return Err(SemanticError {
+            reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
+        });
+    };
+    let expected = analyze_expression(first)?;
+    for expression in expressions {
+        if analyze_expression(expression)? != expected {
+            return Err(SemanticError {
+                reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
+            });
+        }
+    }
+    Ok(expected)
+}
+
+#[rustfmt::skip]
 struct ExpressionParser<'a> {
-    source: &'a str,
-    values: &'a [ComponentValue],
-    current: usize,
+    source:             &'a str,
+    values:             &'a [ComponentValue],
+    current:            usize,
 }
 
 impl ExpressionParser<'_> {
@@ -246,12 +279,75 @@ impl ExpressionParser<'_> {
                 }
                 Ok(Expr::Group(Box::new(expression)))
             }
-            ComponentValue::FUNCTION(function) => Err(self.error(
+            ComponentValue::FUNCTION(function) => {
+                self.current += 1;
+                self.parse_math_function(function)
+            }
+            _ => Err(self.error(ExpressionErrorReason::UNEXPECTED_TOKEN, self.peek_token())),
+        }
+    }
+
+    fn parse_math_function(&mut self, function: &Function) -> Result<Expr, ExpressionError> {
+        let Some(name) = token_text(self.source, &function.name) else {
+            return Err(self.error(
+                ExpressionErrorReason::UNSUPPORTED_FUNCTION,
+                Some(&function.name),
+            ));
+        };
+        let name = name.to_ascii_lowercase();
+        if function.closing.is_none() {
+            return Err(self.error(ExpressionErrorReason::UNEXPECTED_EOF, Some(&function.name)));
+        }
+
+        let arguments = split_arguments(&function.values);
+        if arguments.iter().any(|argument| is_empty_argument(argument)) {
+            return Err(self.error(ExpressionErrorReason::EMPTY_ARGUMENT, Some(&function.name)));
+        }
+
+        match name.as_str() {
+            "min" if arguments.len() >= 2 => Ok(Expr::Min(self.parse_arguments(&arguments)?)),
+            "max" if arguments.len() >= 2 => Ok(Expr::Max(self.parse_arguments(&arguments)?)),
+            "clamp" if arguments.len() == 3 => {
+                let mut parsed = self.parse_arguments(&arguments)?.into_iter();
+                Ok(Expr::Clamp {
+                    min: Box::new(parsed.next().expect("argument count checked")),
+                    value: Box::new(parsed.next().expect("argument count checked")),
+                    max: Box::new(parsed.next().expect("argument count checked")),
+                })
+            }
+            "min" | "max" | "clamp" => Err(self.error(
+                ExpressionErrorReason::INVALID_ARGUMENT_COUNT,
+                Some(&function.name),
+            )),
+            _ => Err(self.error(
                 ExpressionErrorReason::UNSUPPORTED_FUNCTION,
                 Some(&function.name),
             )),
-            _ => Err(self.error(ExpressionErrorReason::UNEXPECTED_TOKEN, self.peek_token())),
         }
+    }
+
+    fn parse_arguments(
+        &self,
+        arguments: &[&[ComponentValue]],
+    ) -> Result<Vec<Expr>, ExpressionError> {
+        arguments
+            .iter()
+            .map(|argument| {
+                let mut parser = ExpressionParser {
+                    source: self.source,
+                    values: argument,
+                    current: 0,
+                };
+                let expression = parser.parse_additive()?;
+                parser.skip_whitespace();
+                if parser.current != parser.values.len() {
+                    return Err(
+                        parser.error(ExpressionErrorReason::UNEXPECTED_TOKEN, parser.peek_token())
+                    );
+                }
+                Ok(expression)
+            })
+            .collect::<Result<Vec<_>, _>>()
     }
 
     fn numeric_literal(&self, token: &TokenData) -> Result<NumericLiteral, ExpressionError> {
@@ -330,8 +426,12 @@ impl ExpressionParser<'_> {
 
 fn token_text<'a>(source: &'a str, token: &TokenData) -> Option<&'a str> {
     let LexerSpan(start, cursor) = token.span;
-    let code_point = source.get(cursor..)?.chars().next()?;
-    let end = cursor + code_point.len_utf8();
+    let end = if token.kind == TokenKind::FUNCTION || source.get(cursor..)?.starts_with('(') {
+        cursor
+    } else {
+        let code_point = source.get(cursor..)?.chars().next()?;
+        cursor + code_point.len_utf8()
+    };
     source.get(start..end)
 }
 
@@ -367,6 +467,38 @@ fn number_end(text: &str) -> Option<usize> {
     }
 
     (index > 0).then_some(index)
+}
+
+fn split_arguments(values: &[ComponentValue]) -> Vec<&[ComponentValue]> {
+    let mut arguments = Vec::new();
+    let mut start = 0;
+
+    for (index, value) in values.iter().enumerate() {
+        if matches!(
+            value,
+            ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::COMMA,
+                ..
+            })
+        ) {
+            arguments.push(&values[start..index]);
+            start = index + 1;
+        }
+    }
+    arguments.push(&values[start..]);
+    arguments
+}
+
+fn is_empty_argument(values: &[ComponentValue]) -> bool {
+    values.iter().all(|value| {
+        matches!(
+            value,
+            ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::WHITESPACE,
+                ..
+            })
+        )
+    })
 }
 
 fn dimension_category(unit: &str) -> String {
@@ -589,6 +721,51 @@ mod tests {
     }
 
     #[test]
+    fn parses_min_and_max_as_expression_nodes() {
+        let source = ".a{width:calc(min(1px, 2px) + MAX(3px, 4px));} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+        let Expr::Add(left, right) = expression else {
+            panic!("expected addition");
+        };
+
+        assert!(matches!(*left, Expr::Min(arguments) if arguments.len() == 2));
+        assert!(matches!(*right, Expr::Max(arguments) if arguments.len() == 2));
+    }
+
+    #[test]
+    fn parses_clamp_with_three_arguments() {
+        let source = ".a{width:calc(clamp(1px, 2px, 3px));} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert!(matches!(expression, Expr::Clamp { .. }));
+    }
+
+    #[test]
+    fn rejects_invalid_math_function_argument_counts() {
+        for source in [
+            ".a{width:calc(min(1px));} ",
+            ".a{width:calc(max(1px));} ",
+            ".a{width:calc(clamp(1px, 2px));} ",
+            ".a{width:calc(clamp(1px, 2px, 3px, 4px));} ",
+        ] {
+            let function = calc_function(source);
+            let error = parse_calc_expression(source, &function).unwrap_err();
+            assert_eq!(error.reason, ExpressionErrorReason::INVALID_ARGUMENT_COUNT);
+        }
+    }
+
+    #[test]
+    fn rejects_empty_math_function_arguments() {
+        let source = ".a{width:calc(min(1px,));} ";
+        let function = calc_function(source);
+
+        let error = parse_calc_expression(source, &function).unwrap_err();
+        assert_eq!(error.reason, ExpressionErrorReason::EMPTY_ARGUMENT);
+    }
+
+    #[test]
     fn rejects_missing_operand() {
         let source = ".a{width:calc(1px +);} ";
         let function = calc_function(source);
@@ -599,7 +776,7 @@ mod tests {
 
     #[test]
     fn rejects_nested_unsupported_function() {
-        let source = ".a{width:calc(min(1px, 2px) + 1px);} ";
+        let source = ".a{width:calc(round(1px) + 1px);} ";
         let function = calc_function(source);
 
         let error = parse_calc_expression(source, &function).unwrap_err();

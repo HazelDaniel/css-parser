@@ -21,9 +21,24 @@ primary-expression
       | PERCENTAGE
       | DIMENSION
       | parenthesized-expression
+      | math-function
 
 parenthesized-expression
     ::= PAREN_OPEN expression PAREN_CLOSE
+
+math-function
+    ::= MIN_FUNCTION
+      | MAX_FUNCTION
+      | CLAMP_FUNCTION
+
+MIN_FUNCTION
+    ::= "min(" expression (COMMA expression)+ ")"
+
+MAX_FUNCTION
+    ::= "max(" expression (COMMA expression)+ ")"
+
+CLAMP_FUNCTION
+    ::= "clamp(" expression COMMA expression COMMA expression ")"
 
 
 Operator precedence
@@ -43,9 +58,9 @@ Supported value forms
 - Percentages
 - Dimensions with units
 - Parenthesized expressions
+- min(), max(), and clamp() with numeric arguments
 - The operators +, -, *, and /
 - var() substitution before expression parsing
 
-Nested functions other than var() are not currently accepted as expression
-primaries. Functions such as min(), max(), and clamp() are therefore outside
-this grammar until explicitly implemented.
+Other nested functions remain outside this grammar. `var()` is resolved before
+expression parsing and is therefore not an expression primary here.
