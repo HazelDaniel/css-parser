@@ -80,6 +80,29 @@ pub struct SemanticError {
     pub reason: SemanticErrorReason,
 }
 
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq)]
+pub enum EvaluationResult<T> {
+    Resolved(T),
+    Deferred(Expr),
+    Invalid(EvaluationError),
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum EvaluationErrorReason {
+    DIVISION_BY_ZERO,
+    INVALID_OPERATION,
+    NON_FINITE_RESULT,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvaluationError {
+    pub reason: EvaluationErrorReason,
+}
+
 pub fn parse_calc_expression(source: &str, function: &Function) -> Result<Expr, ExpressionError> {
     let mut parser = ExpressionParser {
         source,
@@ -160,6 +183,209 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
             analyze_same_type([min.as_ref(), value.as_ref(), max.as_ref()].into_iter())
         }
     }
+}
+
+pub fn evaluate_expression(expression: &Expr) -> EvaluationResult<NumericLiteral> {
+    match expression {
+        Expr::Literal(literal) => EvaluationResult::Resolved(literal.clone()),
+        Expr::Group(expression) => match evaluate_expression(expression) {
+            EvaluationResult::Resolved(value) => EvaluationResult::Resolved(value),
+            EvaluationResult::Deferred(_) => {
+                EvaluationResult::Deferred(expression.as_ref().clone())
+            }
+            EvaluationResult::Invalid(error) => EvaluationResult::Invalid(error),
+        },
+        Expr::Add(left, right) => evaluate_additive(expression, left, right, false),
+        Expr::Subtract(left, right) => evaluate_additive(expression, left, right, true),
+        Expr::Multiply(left, right) => evaluate_multiplication(expression, left, right),
+        Expr::Divide(left, right) => evaluate_division(expression, left, right),
+        Expr::Min(arguments) => evaluate_min_max(expression, arguments, false),
+        Expr::Max(arguments) => evaluate_min_max(expression, arguments, true),
+        Expr::Clamp { min, value, max } => evaluate_clamp(expression, min, value, max),
+    }
+}
+
+fn evaluate_additive(
+    expression: &Expr,
+    left: &Expr,
+    right: &Expr,
+    subtract: bool,
+) -> EvaluationResult<NumericLiteral> {
+    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) =
+        (evaluate_expression(left), evaluate_expression(right))
+    else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    if left.unit != right.unit
+        || is_context_dependent(&left.unit)
+        || is_context_dependent(&right.unit)
+    {
+        return EvaluationResult::Deferred(expression.clone());
+    }
+    let value = if subtract {
+        left.value - right.value
+    } else {
+        left.value + right.value
+    };
+    numeric_result(value, left.unit, left.span)
+}
+
+fn evaluate_multiplication(
+    expression: &Expr,
+    left: &Expr,
+    right: &Expr,
+) -> EvaluationResult<NumericLiteral> {
+    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) =
+        (evaluate_expression(left), evaluate_expression(right))
+    else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    if is_context_dependent(&left.unit) || is_context_dependent(&right.unit) {
+        return EvaluationResult::Deferred(expression.clone());
+    }
+    if left.unit.is_some() && right.unit.is_some() {
+        return EvaluationResult::Invalid(EvaluationError {
+            reason: EvaluationErrorReason::INVALID_OPERATION,
+        });
+    }
+    let unit = left.unit.or(right.unit);
+    numeric_result(left.value * right.value, unit, left.span)
+}
+
+fn evaluate_division(
+    expression: &Expr,
+    left: &Expr,
+    right: &Expr,
+) -> EvaluationResult<NumericLiteral> {
+    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) =
+        (evaluate_expression(left), evaluate_expression(right))
+    else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    if right.value == 0.0 {
+        return EvaluationResult::Invalid(EvaluationError {
+            reason: EvaluationErrorReason::DIVISION_BY_ZERO,
+        });
+    }
+    if is_context_dependent(&left.unit) || is_context_dependent(&right.unit) {
+        return EvaluationResult::Deferred(expression.clone());
+    }
+    if right.unit.is_some() {
+        return EvaluationResult::Invalid(EvaluationError {
+            reason: EvaluationErrorReason::INVALID_OPERATION,
+        });
+    }
+    numeric_result(left.value / right.value, left.unit, left.span)
+}
+
+fn evaluate_min_max(
+    expression: &Expr,
+    arguments: &[Expr],
+    maximum: bool,
+) -> EvaluationResult<NumericLiteral> {
+    let mut values = Vec::with_capacity(arguments.len());
+    for argument in arguments {
+        let EvaluationResult::Resolved(value) = evaluate_expression(argument) else {
+            return EvaluationResult::Deferred(expression.clone());
+        };
+        values.push(value);
+    }
+    let Some(first) = values.first() else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    if values
+        .iter()
+        .any(|value| value.unit != first.unit || is_context_dependent(&value.unit))
+    {
+        return EvaluationResult::Deferred(expression.clone());
+    }
+    let selected = values
+        .into_iter()
+        .reduce(|current, value| {
+            let selected = if maximum {
+                value.value > current.value
+            } else {
+                value.value < current.value
+            };
+            if selected {
+                value
+            } else {
+                current
+            }
+        })
+        .expect("values is non-empty");
+    EvaluationResult::Resolved(selected)
+}
+
+fn evaluate_clamp(
+    expression: &Expr,
+    min: &Expr,
+    value: &Expr,
+    max: &Expr,
+) -> EvaluationResult<NumericLiteral> {
+    let EvaluationResult::Resolved(min) = evaluate_expression(min) else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    let EvaluationResult::Resolved(value) = evaluate_expression(value) else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    let EvaluationResult::Resolved(max) = evaluate_expression(max) else {
+        return EvaluationResult::Deferred(expression.clone());
+    };
+    if min.unit != value.unit
+        || value.unit != max.unit
+        || is_context_dependent(&min.unit)
+        || is_context_dependent(&value.unit)
+        || is_context_dependent(&max.unit)
+    {
+        return EvaluationResult::Deferred(expression.clone());
+    }
+    EvaluationResult::Resolved(NumericLiteral {
+        value: value.value.max(min.value).min(max.value),
+        unit: value.unit,
+        span: value.span,
+    })
+}
+
+fn numeric_result(
+    value: f64,
+    unit: Option<String>,
+    span: LexerSpan,
+) -> EvaluationResult<NumericLiteral> {
+    if value.is_finite() {
+        EvaluationResult::Resolved(NumericLiteral { value, unit, span })
+    } else {
+        EvaluationResult::Invalid(EvaluationError {
+            reason: EvaluationErrorReason::NON_FINITE_RESULT,
+        })
+    }
+}
+
+fn is_context_dependent(unit: &Option<String>) -> bool {
+    let Some(unit) = unit.as_deref() else {
+        return false;
+    };
+    matches!(
+        unit.to_ascii_lowercase().as_str(),
+        "%" | "cap"
+            | "ch"
+            | "em"
+            | "ex"
+            | "ic"
+            | "lh"
+            | "rem"
+            | "rlh"
+            | "vh"
+            | "vmax"
+            | "vmin"
+            | "vw"
+            | "dvh"
+            | "dvw"
+            | "lvh"
+            | "lvw"
+            | "svh"
+            | "svw"
+    )
 }
 
 fn analyze_same_type<'a>(
@@ -347,7 +573,7 @@ impl ExpressionParser<'_> {
                 }
                 Ok(expression)
             })
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Vec<Expr>, ExpressionError>>()
     }
 
     fn numeric_literal(&self, token: &TokenData) -> Result<NumericLiteral, ExpressionError> {
@@ -763,6 +989,58 @@ mod tests {
 
         let error = parse_calc_expression(source, &function).unwrap_err();
         assert_eq!(error.reason, ExpressionErrorReason::EMPTY_ARGUMENT);
+    }
+
+    #[test]
+    fn folds_context_free_addition() {
+        let source = ".a{width:calc(10px + 5px);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        let EvaluationResult::Resolved(value) = evaluate_expression(&expression) else {
+            panic!("expected a folded value");
+        };
+        assert_eq!(value.value, 15.0);
+        assert_eq!(value.unit.as_deref(), Some("px"));
+    }
+
+    #[test]
+    fn folds_unitless_multiplication() {
+        let source = ".a{opacity:calc(2 * 3);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        let EvaluationResult::Resolved(value) = evaluate_expression(&expression) else {
+            panic!("expected a folded value");
+        };
+        assert_eq!(value.value, 6.0);
+        assert_eq!(value.unit, None);
+    }
+
+    #[test]
+    fn defers_percentage_folding_without_context() {
+        let source = ".a{width:calc(10% + 5%);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert!(matches!(
+            evaluate_expression(&expression),
+            EvaluationResult::Deferred(Expr::Add(_, _))
+        ));
+    }
+
+    #[test]
+    fn reports_division_by_zero() {
+        let source = ".a{width:calc(10px / 0);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert_eq!(
+            evaluate_expression(&expression),
+            EvaluationResult::Invalid(EvaluationError {
+                reason: EvaluationErrorReason::DIVISION_BY_ZERO,
+            })
+        );
     }
 
     #[test]
