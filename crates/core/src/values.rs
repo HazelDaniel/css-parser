@@ -4,6 +4,30 @@ use crate::token::TokenKind;
 use crate::types::LexerSpan;
 
 #[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListSeparator {
+    Whitespace,
+    Comma,
+    Slash,
+    Mixed,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Number(NumericLiteral),
+    String(TokenData),
+    Keyword(TokenData),
+    Url(TokenData),
+    Function(Function),
+    List {
+        items:     Vec<Value>,
+        separator: ListSeparator,
+    },
+    Raw(Vec<ComponentValue>),
+}
+
+#[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(NumericLiteral),
@@ -100,7 +124,142 @@ pub enum EvaluationErrorReason {
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationError {
-    pub reason: EvaluationErrorReason,
+    pub reason:             EvaluationErrorReason,
+}
+
+pub fn parse_value_list(source: &str, values: &[ComponentValue]) -> Result<Value, ValueParseError> {
+    let mut items = Vec::new();
+    let mut separator = None;
+    let mut saw_separator = false;
+    let mut needs_separator = false;
+    let mut last_was_separator = false;
+
+    for value in values {
+        if matches!(
+            value,
+            ComponentValue::PRESERVED(TokenData {
+                kind: TokenKind::WHITESPACE,
+                ..
+            })
+        ) {
+            if !items.is_empty() && !last_was_separator {
+                needs_separator = true;
+            }
+            continue;
+        }
+
+        let explicit_separator = match value {
+            ComponentValue::PRESERVED(token) if token.kind == TokenKind::COMMA => {
+                Some(ListSeparator::Comma)
+            }
+            ComponentValue::PRESERVED(token)
+                if matches!(token.kind, TokenKind::SLASH | TokenKind::DELIM('/')) =>
+            {
+                Some(ListSeparator::Slash)
+            }
+            _ => None,
+        };
+        if let Some(current_separator) = explicit_separator {
+            if items.is_empty() || last_was_separator {
+                return Err(ValueParseError {
+                    reason: ValueParseErrorReason::INVALID_LIST,
+                });
+            }
+            record_separator(&mut separator, current_separator);
+            saw_separator = true;
+            needs_separator = false;
+            last_was_separator = true;
+            continue;
+        }
+
+        if !items.is_empty() && !needs_separator && !saw_separator {
+            return Ok(Value::Raw(values.to_vec()));
+        }
+        if !items.is_empty() && needs_separator {
+            record_separator(&mut separator, ListSeparator::Whitespace);
+            saw_separator = true;
+        }
+        needs_separator = false;
+        last_was_separator = false;
+        items.push(parse_scalar_value(source, value)?);
+    }
+
+    if items.is_empty() || needs_separator && separator.is_none() {
+        return Ok(Value::Raw(values.to_vec()));
+    }
+    if items.len() == 1 {
+        return Ok(items.pop().expect("one item is present"));
+    }
+    Ok(Value::List {
+        items,
+        separator: separator.unwrap_or(ListSeparator::Mixed),
+    })
+}
+
+fn parse_scalar_value(source: &str, value: &ComponentValue) -> Result<Value, ValueParseError> {
+    match value {
+        ComponentValue::PRESERVED(token) => match token.kind {
+            TokenKind::NUMBER | TokenKind::PERCENTAGE | TokenKind::DIMENSION => {
+                parse_numeric_value(source, token)
+            }
+            TokenKind::STRING => Ok(Value::String(token.clone())),
+            TokenKind::IDENT => Ok(Value::Keyword(token.clone())),
+            TokenKind::URL => Ok(Value::Url(token.clone())),
+            _ => Ok(Value::Raw(vec![value.clone()])),
+        },
+        ComponentValue::FUNCTION(function) => Ok(Value::Function(function.clone())),
+        ComponentValue::SIMPLE_BLOCK(_) => Ok(Value::Raw(vec![value.clone()])),
+    }
+}
+
+fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValueParseError> {
+    let text = token_text(source, token).ok_or(ValueParseError {
+        reason: ValueParseErrorReason::INVALID_NUMBER,
+    })?;
+    let (number_text, unit) = match token.kind {
+        TokenKind::NUMBER => (text, None),
+        TokenKind::PERCENTAGE => (
+            text.strip_suffix('%').unwrap_or(text),
+            Some("%".to_string()),
+        ),
+        TokenKind::DIMENSION => {
+            let index = number_end(text).ok_or(ValueParseError {
+                reason: ValueParseErrorReason::INVALID_NUMBER,
+            })?;
+            (&text[..index], Some(text[index..].to_string()))
+        }
+        _ => unreachable!("parse_numeric_value called for a non-numeric token"),
+    };
+    let value = number_text.parse::<f64>().map_err(|_| ValueParseError {
+        reason: ValueParseErrorReason::INVALID_NUMBER,
+    })?;
+    Ok(Value::Number(NumericLiteral {
+        value,
+        unit,
+        span: token.span,
+    }))
+}
+
+fn record_separator(separator: &mut Option<ListSeparator>, current: ListSeparator) {
+    match separator {
+        None => *separator = Some(current),
+        Some(existing) if *existing != current => *existing = ListSeparator::Mixed,
+        Some(_) => {}
+    }
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum ValueParseErrorReason {
+    INVALID_NUMBER,
+    INVALID_LIST,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueParseError {
+    pub reason:             ValueParseErrorReason,
 }
 
 pub fn parse_calc_expression(source: &str, function: &Function) -> Result<Expr, ExpressionError> {
@@ -1041,6 +1200,76 @@ mod tests {
                 reason: EvaluationErrorReason::DIVISION_BY_ZERO,
             })
         );
+    }
+
+    #[test]
+    fn parses_scalar_values() {
+        let cases = [
+            (".a{width:12px;} ", "dimension"),
+            (".a{opacity:0.5;} ", "number"),
+            (".a{width:50%;} ", "percentage"),
+            (".a{font-family:\"Open Sans\";} ", "string"),
+            (".a{display:block;} ", "keyword"),
+            (".a{src:url(font.woff2);} ", "url"),
+        ];
+
+        for (source, expected) in cases {
+            let declaration = first_declaration(source);
+            let value = parse_value_list(source, &declaration.value).unwrap();
+            let actual = match value {
+                Value::Number(number) if number.unit.as_deref() == Some("px") => "dimension",
+                Value::Number(number) if number.unit.as_deref() == Some("%") => "percentage",
+                Value::Number(_) => "number",
+                Value::String(_) => "string",
+                Value::Keyword(_) => "keyword",
+                Value::Url(_) => "url",
+                _ => "other",
+            };
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn preserves_list_separator_kinds() {
+        let whitespace_source = ".a{margin:10px 20px 30px;} ";
+        let comma_source = ".a{font-family:Arial, sans-serif;} ";
+        let slash_source = ".a{font:12px/1.5 Arial;} ";
+        let whitespace = first_declaration(whitespace_source);
+        let comma = first_declaration(comma_source);
+        let slash = first_declaration(slash_source);
+
+        assert!(matches!(
+            parse_value_list(whitespace_source, &whitespace.value).unwrap(),
+            Value::List {
+                separator: ListSeparator::Whitespace,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_value_list(comma_source, &comma.value).unwrap(),
+            Value::List {
+                separator: ListSeparator::Comma,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse_value_list(slash_source, &slash.value).unwrap(),
+            Value::List {
+                separator: ListSeparator::Mixed,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn preserves_unsupported_component_values_as_raw() {
+        let source = ".a{content:[unsupported];} ";
+        let declaration = first_declaration(source);
+
+        assert!(matches!(
+            parse_value_list(source, &declaration.value).unwrap(),
+            Value::Raw(_)
+        ));
     }
 
     #[test]

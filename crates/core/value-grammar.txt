@@ -1,0 +1,37 @@
+CSS Typed Value Grammar
+=======================
+
+This grammar describes the generic typed-value layer. Property-specific
+grammars are intentionally outside this module.
+
+value
+    ::= scalar-value
+      | value-list
+      | raw-value
+
+scalar-value
+    ::= NUMBER
+      | PERCENTAGE
+      | DIMENSION
+      | STRING
+      | IDENT
+      | URL
+      | FUNCTION
+
+value-list
+    ::= scalar-value (WHITESPACE scalar-value)+
+      | scalar-value (COMMA scalar-value)+
+      | scalar-value (SLASH scalar-value)+
+      | scalar-value (list-separator scalar-value)+
+
+list-separator
+    ::= WHITESPACE
+      | COMMA
+      | SLASH
+
+raw-value
+    ::= any unsupported component-value sequence
+
+Whitespace, comma, and slash separators are preserved through ListSeparator.
+Mixed separators produce a Mixed list separator. Unsupported component values
+are retained as Raw rather than rejected by the generic value parser.
