@@ -13,9 +13,22 @@ pub enum ListSeparator {
 }
 
 #[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Color {
+    Hex {
+        value:  u32,
+        digits: usize,
+        span:   LexerSpan,
+    },
+    Named(TokenData),
+    Function(Function),
+}
+
+#[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(NumericLiteral),
+    Color(Color),
     String(TokenData),
     Keyword(TokenData),
     Url(TokenData),
@@ -202,14 +215,65 @@ fn parse_scalar_value(source: &str, value: &ComponentValue) -> Result<Value, Val
             TokenKind::NUMBER | TokenKind::PERCENTAGE | TokenKind::DIMENSION => {
                 parse_numeric_value(source, token)
             }
+            TokenKind::ID_HASH | TokenKind::GENERIC_HASH | TokenKind::HASH_TOKEN => {
+                parse_hex_color(source, token)
+            }
             TokenKind::STRING => Ok(Value::String(token.clone())),
+            TokenKind::IDENT if is_named_color(source, token) => {
+                Ok(Value::Color(Color::Named(token.clone())))
+            }
             TokenKind::IDENT => Ok(Value::Keyword(token.clone())),
             TokenKind::URL => Ok(Value::Url(token.clone())),
             _ => Ok(Value::Raw(vec![value.clone()])),
         },
+        ComponentValue::FUNCTION(function) if is_color_function(source, &function.name) => {
+            Ok(Value::Color(Color::Function(function.clone())))
+        }
         ComponentValue::FUNCTION(function) => Ok(Value::Function(function.clone())),
         ComponentValue::SIMPLE_BLOCK(_) => Ok(Value::Raw(vec![value.clone()])),
     }
+}
+
+fn parse_hex_color(source: &str, token: &TokenData) -> Result<Value, ValueParseError> {
+    let text = token_text(source, token).ok_or(ValueParseError {
+        reason: ValueParseErrorReason::INVALID_COLOR,
+    })?;
+    let digits = text.strip_prefix('#').ok_or(ValueParseError {
+        reason: ValueParseErrorReason::INVALID_COLOR,
+    })?;
+    if !matches!(digits.len(), 3 | 4 | 6 | 8)
+        || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(ValueParseError {
+            reason: ValueParseErrorReason::INVALID_COLOR,
+        });
+    }
+    let value = u32::from_str_radix(digits, 16).map_err(|_| ValueParseError {
+        reason: ValueParseErrorReason::INVALID_COLOR,
+    })?;
+    Ok(Value::Color(Color::Hex {
+        value,
+        digits: digits.len(),
+        span: token.span,
+    }))
+}
+
+fn is_color_function(source: &str, token: &TokenData) -> bool {
+    token_text(source, token).is_some_and(|name| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "rgb" | "rgba" | "hsl" | "hsla" | "hwb" | "lab" | "lch" | "oklab" | "oklch" | "color"
+        )
+    })
+}
+
+fn is_named_color(source: &str, token: &TokenData) -> bool {
+    const NAMES: &str = "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent currentcolor";
+    token_text(source, token).is_some_and(|name| {
+        NAMES
+            .split_whitespace()
+            .any(|candidate| candidate.eq_ignore_ascii_case(name))
+    })
 }
 
 fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValueParseError> {
@@ -253,6 +317,7 @@ fn record_separator(separator: &mut Option<ListSeparator>, current: ListSeparato
 #[allow(non_camel_case_types)]
 pub enum ValueParseErrorReason {
     INVALID_NUMBER,
+    INVALID_COLOR,
     INVALID_LIST,
 }
 
@@ -1227,6 +1292,35 @@ mod tests {
             };
             assert_eq!(actual, expected, "{source}");
         }
+    }
+
+    #[test]
+    fn parses_hex_named_and_function_colors() {
+        let hex_source = ".a{color:#0f08;} ";
+        let named_source = ".a{color:ReBeccAPurple;} ";
+        let function_source = ".a{color:rgb(10 20 30 / 50%);} ";
+
+        assert!(matches!(
+            parse_value_list(hex_source, &first_declaration(hex_source).value).unwrap(),
+            Value::Color(Color::Hex { digits: 4, .. })
+        ));
+        assert!(matches!(
+            parse_value_list(named_source, &first_declaration(named_source).value).unwrap(),
+            Value::Color(Color::Named(_))
+        ));
+        assert!(matches!(
+            parse_value_list(function_source, &first_declaration(function_source).value).unwrap(),
+            Value::Color(Color::Function(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_hex_colors() {
+        let source = ".a{color:#12;} ";
+        let declaration = first_declaration(source);
+
+        let error = parse_value_list(source, &declaration.value).unwrap_err();
+        assert_eq!(error.reason, ValueParseErrorReason::INVALID_COLOR);
     }
 
     #[test]

@@ -13,10 +13,23 @@ scalar-value
     ::= NUMBER
       | PERCENTAGE
       | DIMENSION
+      | color-value
       | STRING
       | IDENT
       | URL
       | FUNCTION
+
+color-value
+    ::= HASH_TOKEN
+      | named-color
+      | color-function
+
+named-color
+    ::= IDENT recognized as a CSS named color keyword
+
+color-function
+    ::= rgb() | rgba() | hsl() | hsla() | hwb()
+      | lab() | lch() | oklab() | oklch() | color()
 
 value-list
     ::= scalar-value (WHITESPACE scalar-value)+
@@ -35,3 +48,6 @@ raw-value
 Whitespace, comma, and slash separators are preserved through ListSeparator.
 Mixed separators produce a Mixed list separator. Unsupported component values
 are retained as Raw rather than rejected by the generic value parser.
+
+Color functions are parsed structurally; channel ranges, color spaces, gamut,
+and conversion semantics are deferred to later analysis.
