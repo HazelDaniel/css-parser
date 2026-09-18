@@ -144,6 +144,8 @@ pub struct EvaluationError {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct EvaluationContext {
     pub percentage_basis:           Option<f64>,
+    pub font_size:                  Option<f64>,
+    pub root_font_size:             Option<f64>,
 }
 
 pub fn parse_value_list(source: &str, values: &[ComponentValue]) -> Result<Value, ValueParseError> {
@@ -507,7 +509,7 @@ fn is_length_percentage_value(source: &str, value: &Value, allow_auto: bool) -> 
 
 fn is_box_shorthand(source: &str, value: &Value, allow_auto: bool) -> bool {
     match value {
-        Value::List { items, .. } if (1..=4).contains(&items.len()) => items
+        Value::List { items, .. } if items.len() <= 4 => items
             .iter()
             .all(|item| is_length_percentage_value(source, item, allow_auto)),
         _ => is_length_percentage_value(source, value, allow_auto),
@@ -618,13 +620,7 @@ pub fn evaluate_expression_with_context(
     context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
     match expression {
-        Expr::Literal(literal) if literal.unit.as_deref() == Some("%") => {
-            let Some(basis) = context.percentage_basis else {
-                return EvaluationResult::Deferred(expression.clone());
-            };
-            numeric_result(literal.value * basis / 100.0, None, literal.span)
-        }
-        Expr::Literal(literal) => EvaluationResult::Resolved(literal.clone()),
+        Expr::Literal(literal) => evaluate_literal(literal, expression, context),
         Expr::Group(expression) => match evaluate_expression_with_context(expression, context) {
             EvaluationResult::Resolved(value) => EvaluationResult::Resolved(value),
             EvaluationResult::Deferred(_) => {
@@ -639,6 +635,31 @@ pub fn evaluate_expression_with_context(
         Expr::Min(arguments) => evaluate_min_max(expression, arguments, false, context),
         Expr::Max(arguments) => evaluate_min_max(expression, arguments, true, context),
         Expr::Clamp { min, value, max } => evaluate_clamp(expression, min, value, max, context),
+    }
+}
+
+fn evaluate_literal(
+    literal: &NumericLiteral,
+    expression: &Expr,
+    context: &EvaluationContext,
+) -> EvaluationResult<NumericLiteral> {
+    let Some(unit) = literal.unit.as_deref() else {
+        return EvaluationResult::Resolved(literal.clone());
+    };
+    let basis = if unit == "%" {
+        context
+            .percentage_basis
+            .map(|basis| literal.value * basis / 100.0)
+    } else if unit.eq_ignore_ascii_case("em") {
+        context.font_size.map(|basis| literal.value * basis)
+    } else if unit.eq_ignore_ascii_case("rem") {
+        context.root_font_size.map(|basis| literal.value * basis)
+    } else {
+        return EvaluationResult::Resolved(literal.clone());
+    };
+    match basis {
+        Some(value) => numeric_result(value, None, literal.span),
+        None => EvaluationResult::Deferred(expression.clone()),
     }
 }
 
@@ -1482,6 +1503,7 @@ mod tests {
         let expression = parse_calc_expression(source, &function).unwrap();
         let context = EvaluationContext {
             percentage_basis: Some(200.0),
+            ..EvaluationContext::default()
         };
 
         let EvaluationResult::Resolved(value) =
@@ -1491,6 +1513,38 @@ mod tests {
         };
         assert_eq!(value.value, 30.0);
         assert_eq!(value.unit, None);
+    }
+
+    #[test]
+    fn resolves_em_and_rem_with_font_context() {
+        let source = ".a{width:calc(2em + 1rem);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+        let context = EvaluationContext {
+            font_size: Some(16.0),
+            root_font_size: Some(20.0),
+            ..EvaluationContext::default()
+        };
+
+        let EvaluationResult::Resolved(value) =
+            evaluate_expression_with_context(&expression, &context)
+        else {
+            panic!("expected relative-unit resolution");
+        };
+        assert_eq!(value.value, 52.0);
+        assert_eq!(value.unit, None);
+    }
+
+    #[test]
+    fn defers_relative_units_without_font_context() {
+        let source = ".a{width:calc(2em + 1rem);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+
+        assert!(matches!(
+            evaluate_expression(&expression),
+            EvaluationResult::Deferred(Expr::Add(_, _))
+        ));
     }
 
     #[test]
