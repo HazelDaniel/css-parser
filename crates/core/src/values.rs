@@ -72,6 +72,7 @@ pub struct NumericLiteral {
     pub value:        f64,
     pub unit:         Option<String>,
     pub span:         LexerSpan,
+    pub line:         usize,
 }
 
 #[rustfmt::skip]
@@ -114,7 +115,9 @@ pub enum SemanticErrorReason {
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticError {
-    pub reason: SemanticErrorReason,
+    pub reason:             SemanticErrorReason,
+    pub span:               LexerSpan,
+    pub line:               usize,
 }
 
 #[rustfmt::skip]
@@ -138,6 +141,8 @@ pub enum EvaluationErrorReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationError {
     pub reason:             EvaluationErrorReason,
+    pub span:               LexerSpan,
+    pub line:               usize,
 }
 
 #[rustfmt::skip]
@@ -184,6 +189,8 @@ pub fn parse_value_list(source: &str, values: &[ComponentValue]) -> Result<Value
             if items.is_empty() || last_was_separator {
                 return Err(ValueParseError {
                     reason: ValueParseErrorReason::INVALID_LIST,
+                    span: LexerSpan(0, 0),
+                    line: 0,
                 });
             }
             record_separator(&mut separator, current_separator);
@@ -245,19 +252,27 @@ fn parse_scalar_value(source: &str, value: &ComponentValue) -> Result<Value, Val
 fn parse_hex_color(source: &str, token: &TokenData) -> Result<Value, ValueParseError> {
     let text = token_text(source, token).ok_or(ValueParseError {
         reason: ValueParseErrorReason::INVALID_COLOR,
+        span: token.span,
+        line: token.line,
     })?;
     let digits = text.strip_prefix('#').ok_or(ValueParseError {
         reason: ValueParseErrorReason::INVALID_COLOR,
+        span: token.span,
+        line: token.line,
     })?;
     if !matches!(digits.len(), 3 | 4 | 6 | 8)
         || !digits.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(ValueParseError {
             reason: ValueParseErrorReason::INVALID_COLOR,
+            span: token.span,
+            line: token.line,
         });
     }
     let value = u32::from_str_radix(digits, 16).map_err(|_| ValueParseError {
         reason: ValueParseErrorReason::INVALID_COLOR,
+        span: token.span,
+        line: token.line,
     })?;
     Ok(Value::Color(Color::Hex {
         value,
@@ -287,6 +302,8 @@ fn is_named_color(source: &str, token: &TokenData) -> bool {
 fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValueParseError> {
     let text = token_text(source, token).ok_or(ValueParseError {
         reason: ValueParseErrorReason::INVALID_NUMBER,
+        span: token.span,
+        line: token.line,
     })?;
     let (number_text, unit) = match token.kind {
         TokenKind::NUMBER => (text, None),
@@ -297,6 +314,8 @@ fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValuePa
         TokenKind::DIMENSION => {
             let index = number_end(text).ok_or(ValueParseError {
                 reason: ValueParseErrorReason::INVALID_NUMBER,
+                span: token.span,
+                line: token.line,
             })?;
             (&text[..index], Some(text[index..].to_string()))
         }
@@ -304,11 +323,14 @@ fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValuePa
     };
     let value = number_text.parse::<f64>().map_err(|_| ValueParseError {
         reason: ValueParseErrorReason::INVALID_NUMBER,
+        span: token.span,
+        line: token.line,
     })?;
     Ok(Value::Number(NumericLiteral {
         value,
         unit,
         span: token.span,
+        line: token.line,
     }))
 }
 
@@ -333,6 +355,8 @@ pub enum ValueParseErrorReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueParseError {
     pub reason:             ValueParseErrorReason,
+    pub span:               LexerSpan,
+    pub line:               usize,
 }
 
 #[rustfmt::skip]
@@ -579,9 +603,10 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
             if left_type == right_type {
                 Ok(left_type)
             } else {
-                Err(SemanticError {
-                    reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
-                })
+                Err(semantic_error(
+                    SemanticErrorReason::INCOMPATIBLE_ADDITION,
+                    expression,
+                ))
             }
         }
         Expr::Multiply(left, right) => {
@@ -589,9 +614,10 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
             let right_type = analyze_expression(right)?;
             match (left_type, right_type) {
                 (NumericType::Number, value) | (value, NumericType::Number) => Ok(value),
-                _ => Err(SemanticError {
-                    reason: SemanticErrorReason::INVALID_MULTIPLICATION,
-                }),
+                _ => Err(semantic_error(
+                    SemanticErrorReason::INVALID_MULTIPLICATION,
+                    expression,
+                )),
             }
         }
         Expr::Divide(left, right) => {
@@ -599,9 +625,10 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
             let right_type = analyze_expression(right)?;
             match (left_type, right_type) {
                 (value, NumericType::Number) => Ok(value),
-                _ => Err(SemanticError {
-                    reason: SemanticErrorReason::INVALID_DIVISION,
-                }),
+                _ => Err(semantic_error(
+                    SemanticErrorReason::INVALID_DIVISION,
+                    expression,
+                )),
             }
         }
         Expr::Min(arguments) | Expr::Max(arguments) => analyze_same_type(arguments.iter()),
@@ -658,7 +685,7 @@ fn evaluate_literal(
         return EvaluationResult::Resolved(literal.clone());
     };
     match basis {
-        Some(value) => numeric_result(value, None, literal.span),
+        Some(value) => numeric_result(value, None, literal.span, literal.line),
         None => EvaluationResult::Deferred(expression.clone()),
     }
 }
@@ -687,7 +714,7 @@ fn evaluate_additive(
     } else {
         left.value + right.value
     };
-    numeric_result(value, left.unit, left.span)
+    numeric_result(value, left.unit, left.span, left.line)
 }
 
 fn evaluate_multiplication(
@@ -708,10 +735,12 @@ fn evaluate_multiplication(
     if left.unit.is_some() && right.unit.is_some() {
         return EvaluationResult::Invalid(EvaluationError {
             reason: EvaluationErrorReason::INVALID_OPERATION,
+            span: expression_span(expression),
+            line: expression_line(expression),
         });
     }
     let unit = left.unit.or(right.unit);
-    numeric_result(left.value * right.value, unit, left.span)
+    numeric_result(left.value * right.value, unit, left.span, left.line)
 }
 
 fn evaluate_division(
@@ -729,6 +758,8 @@ fn evaluate_division(
     if right.value == 0.0 {
         return EvaluationResult::Invalid(EvaluationError {
             reason: EvaluationErrorReason::DIVISION_BY_ZERO,
+            span: left.span,
+            line: left.line,
         });
     }
     if is_context_dependent(&left.unit) || is_context_dependent(&right.unit) {
@@ -737,9 +768,11 @@ fn evaluate_division(
     if right.unit.is_some() {
         return EvaluationResult::Invalid(EvaluationError {
             reason: EvaluationErrorReason::INVALID_OPERATION,
+            span: right.span,
+            line: right.line,
         });
     }
-    numeric_result(left.value / right.value, left.unit, left.span)
+    numeric_result(left.value / right.value, left.unit, left.span, left.line)
 }
 
 fn evaluate_min_max(
@@ -811,6 +844,7 @@ fn evaluate_clamp(
         value: value.value.max(min.value).min(max.value),
         unit: value.unit,
         span: value.span,
+        line: value.line,
     })
 }
 
@@ -818,12 +852,20 @@ fn numeric_result(
     value: f64,
     unit: Option<String>,
     span: LexerSpan,
+    line: usize,
 ) -> EvaluationResult<NumericLiteral> {
     if value.is_finite() {
-        EvaluationResult::Resolved(NumericLiteral { value, unit, span })
+        EvaluationResult::Resolved(NumericLiteral {
+            value,
+            unit,
+            span,
+            line,
+        })
     } else {
         EvaluationResult::Invalid(EvaluationError {
             reason: EvaluationErrorReason::NON_FINITE_RESULT,
+            span,
+            line,
         })
     }
 }
@@ -861,17 +903,59 @@ fn analyze_same_type<'a>(
     let Some(first) = expressions.next() else {
         return Err(SemanticError {
             reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
+            span: LexerSpan(0, 0),
+            line: 0,
         });
     };
     let expected = analyze_expression(first)?;
     for expression in expressions {
         if analyze_expression(expression)? != expected {
-            return Err(SemanticError {
-                reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
-            });
+            return Err(semantic_error(
+                SemanticErrorReason::INCOMPATIBLE_ADDITION,
+                expression,
+            ));
         }
     }
     Ok(expected)
+}
+
+fn semantic_error(reason: SemanticErrorReason, expression: &Expr) -> SemanticError {
+    SemanticError {
+        reason,
+        span: expression_span(expression),
+        line: expression_line(expression),
+    }
+}
+
+fn expression_line(expression: &Expr) -> usize {
+    match expression {
+        Expr::Literal(literal) => literal.line,
+        Expr::Group(expression) => expression_line(expression),
+        Expr::Add(left, _)
+        | Expr::Subtract(left, _)
+        | Expr::Multiply(left, _)
+        | Expr::Divide(left, _) => expression_line(left),
+        Expr::Min(arguments) | Expr::Max(arguments) => {
+            arguments.first().map(expression_line).unwrap_or(0)
+        }
+        Expr::Clamp { min, .. } => expression_line(min),
+    }
+}
+
+fn expression_span(expression: &Expr) -> LexerSpan {
+    match expression {
+        Expr::Literal(literal) => literal.span,
+        Expr::Group(expression) => expression_span(expression),
+        Expr::Add(left, _)
+        | Expr::Subtract(left, _)
+        | Expr::Multiply(left, _)
+        | Expr::Divide(left, _) => expression_span(left),
+        Expr::Min(arguments) | Expr::Max(arguments) => arguments
+            .first()
+            .map(expression_span)
+            .unwrap_or(LexerSpan(0, 0)),
+        Expr::Clamp { min, .. } => expression_span(min),
+    }
 }
 
 #[rustfmt::skip]
@@ -1066,6 +1150,7 @@ impl ExpressionParser<'_> {
             value,
             unit: unit.map(str::to_string),
             span: token.span,
+            line: token.line,
         })
     }
 
@@ -1377,12 +1462,18 @@ mod tests {
         let function = calc_function(source);
         let expression = parse_calc_expression(source, &function).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             analyze_expression(&expression),
             Err(SemanticError {
                 reason: SemanticErrorReason::INCOMPATIBLE_ADDITION,
+                ..
             })
-        );
+        ));
+        let Err(error) = analyze_expression(&expression) else {
+            panic!("expected semantic error");
+        };
+        assert_ne!(error.span, LexerSpan(0, 0));
+        assert_eq!(error.line, 1);
     }
 
     #[test]
@@ -1391,12 +1482,13 @@ mod tests {
         let function = calc_function(source);
         let expression = parse_calc_expression(source, &function).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             analyze_expression(&expression),
             Err(SemanticError {
                 reason: SemanticErrorReason::INVALID_MULTIPLICATION,
+                ..
             })
-        );
+        ));
     }
 
     #[test]
@@ -1405,12 +1497,13 @@ mod tests {
         let function = calc_function(source);
         let expression = parse_calc_expression(source, &function).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             analyze_expression(&expression),
             Err(SemanticError {
                 reason: SemanticErrorReason::INVALID_DIVISION,
+                ..
             })
-        );
+        ));
     }
 
     #[test]
@@ -1553,12 +1646,18 @@ mod tests {
         let function = calc_function(source);
         let expression = parse_calc_expression(source, &function).unwrap();
 
-        assert_eq!(
+        assert!(matches!(
             evaluate_expression(&expression),
             EvaluationResult::Invalid(EvaluationError {
                 reason: EvaluationErrorReason::DIVISION_BY_ZERO,
+                ..
             })
-        );
+        ));
+        let EvaluationResult::Invalid(error) = evaluate_expression(&expression) else {
+            panic!("expected evaluation error");
+        };
+        assert_ne!(error.span, LexerSpan(0, 0));
+        assert_eq!(error.line, 1);
     }
 
     #[test]
@@ -1615,6 +1714,8 @@ mod tests {
 
         let error = parse_value_list(source, &declaration.value).unwrap_err();
         assert_eq!(error.reason, ValueParseErrorReason::INVALID_COLOR);
+        assert_ne!(error.span, LexerSpan(0, 0));
+        assert_eq!(error.line, 1);
     }
 
     #[test]
