@@ -1,0 +1,29 @@
+CSS Property Grammar Subset
+===========================
+
+This file documents the small property registry implemented by the typed-value
+layer. Unknown properties and custom properties remain permissive.
+
+color
+    ::= color-value
+
+width | height
+    ::= NUMBER "0"
+      | DIMENSION
+      | PERCENTAGE
+      | calc() | min() | max() | clamp()
+      | "auto"
+
+opacity
+    ::= NUMBER
+      | PERCENTAGE
+
+display
+    ::= "block" | "inline" | "inline-block"
+      | "flex" | "inline-flex"
+      | "grid" | "inline-grid"
+      | "flow-root" | "none" | "contents"
+
+The registry validates only these generic property shapes. It does not perform
+cascade, inheritance, shorthand expansion, unit conversion, or property-specific
+value computation.

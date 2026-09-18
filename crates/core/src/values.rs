@@ -327,6 +327,148 @@ pub struct ValueParseError {
     pub reason:             ValueParseErrorReason,
 }
 
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyGrammar {
+    Color,
+    LengthPercentageOrAuto,
+    Opacity,
+    Display,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyGrammarRegistry {
+    entries: Vec<(&'static str, PropertyGrammar)>,
+}
+
+impl Default for PropertyGrammarRegistry {
+    fn default() -> Self {
+        Self {
+            entries: vec![
+                ("color", PropertyGrammar::Color),
+                ("width", PropertyGrammar::LengthPercentageOrAuto),
+                ("height", PropertyGrammar::LengthPercentageOrAuto),
+                ("opacity", PropertyGrammar::Opacity),
+                ("display", PropertyGrammar::Display),
+            ],
+        }
+    }
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum PropertyErrorReason {
+    INVALID_VALUE,
+    INVALID_VALUE_SYNTAX,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyError {
+    pub reason:   PropertyErrorReason,
+    pub property: TokenData,
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalyzedDeclaration {
+    pub property: TokenData,
+    pub value:    Value,
+    pub important: bool,
+}
+
+pub fn analyze_declaration(
+    source: &str,
+    declaration: &crate::parser::Declaration,
+    registry: &PropertyGrammarRegistry,
+) -> Result<AnalyzedDeclaration, PropertyError> {
+    let grammar = registry.lookup(source, &declaration.name);
+    let value = parse_value_list(source, &declaration.value).map_err(|_| PropertyError {
+        reason: PropertyErrorReason::INVALID_VALUE_SYNTAX,
+        property: declaration.name.clone(),
+    })?;
+
+    if let Some(grammar) = grammar {
+        if !grammar_accepts(source, grammar, &value) {
+            return Err(PropertyError {
+                reason: PropertyErrorReason::INVALID_VALUE,
+                property: declaration.name.clone(),
+            });
+        }
+    }
+
+    Ok(AnalyzedDeclaration {
+        property: declaration.name.clone(),
+        value,
+        important: declaration.important,
+    })
+}
+
+impl PropertyGrammarRegistry {
+    fn lookup(&self, source: &str, property: &TokenData) -> Option<PropertyGrammar> {
+        let name = token_text(source, property)?;
+        self.entries
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, grammar)| *grammar)
+    }
+}
+
+fn grammar_accepts(source: &str, grammar: PropertyGrammar, value: &Value) -> bool {
+    match grammar {
+        PropertyGrammar::Color => matches!(value, Value::Color(_)),
+        PropertyGrammar::LengthPercentageOrAuto => match value {
+            Value::Number(NumericLiteral {
+                value, unit: None, ..
+            }) => *value == 0.0,
+            Value::Number(number) => number.unit.is_some(),
+            Value::Keyword(token) => source_token_text(source, token)
+                .is_some_and(|name| name.eq_ignore_ascii_case("auto")),
+            Value::Function(function) => is_math_function_name(source, function),
+            _ => false,
+        },
+        PropertyGrammar::Opacity => match value {
+            Value::Number(NumericLiteral { unit: None, .. }) => true,
+            Value::Number(NumericLiteral {
+                unit: Some(unit), ..
+            }) => unit == "%",
+            _ => false,
+        },
+        PropertyGrammar::Display => match value {
+            Value::Keyword(token) => source_token_text(source, token).is_some_and(|name| {
+                matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "block"
+                        | "inline"
+                        | "inline-block"
+                        | "flex"
+                        | "inline-flex"
+                        | "grid"
+                        | "inline-grid"
+                        | "flow-root"
+                        | "none"
+                        | "contents"
+                )
+            }),
+            _ => false,
+        },
+    }
+}
+
+fn is_math_function_name(source: &str, function: &Function) -> bool {
+    source_token_text(source, &function.name).is_some_and(|name| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "calc" | "min" | "max" | "clamp"
+        )
+    })
+}
+
+fn source_token_text<'a>(source: &'a str, token: &TokenData) -> Option<&'a str> {
+    token_text(source, token)
+}
+
 pub fn parse_calc_expression(source: &str, function: &Function) -> Result<Expr, ExpressionError> {
     let mut parser = ExpressionParser {
         source,
@@ -1364,6 +1506,57 @@ mod tests {
             parse_value_list(source, &declaration.value).unwrap(),
             Value::Raw(_)
         ));
+    }
+
+    #[test]
+    fn validates_registered_property_grammars() {
+        let registry = PropertyGrammarRegistry::default();
+        let valid = [
+            ".a{color:red;} ",
+            ".a{width:0;} ",
+            ".a{height:50%;} ",
+            ".a{opacity:0.5;} ",
+            ".a{display:flex;} ",
+        ];
+        for source in valid {
+            let declaration = first_declaration(source);
+            assert!(
+                analyze_declaration(source, &declaration, &registry).is_ok(),
+                "{source}"
+            );
+        }
+
+        let invalid = [
+            ".a{color:12px;} ",
+            ".a{width:red;} ",
+            ".a{opacity:2px;} ",
+            ".a{display:banana;} ",
+        ];
+        for source in invalid {
+            let declaration = first_declaration(source);
+            assert_eq!(
+                analyze_declaration(source, &declaration, &registry)
+                    .unwrap_err()
+                    .reason,
+                PropertyErrorReason::INVALID_VALUE,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn leaves_unknown_and_custom_properties_permissive() {
+        let registry = PropertyGrammarRegistry::default();
+        for source in [
+            ".a{unknown-property:banana;} ",
+            ".a{--custom:[unsupported];} ",
+        ] {
+            let declaration = first_declaration(source);
+            assert!(
+                analyze_declaration(source, &declaration, &registry).is_ok(),
+                "{source}"
+            );
+        }
     }
 
     #[test]
