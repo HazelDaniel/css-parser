@@ -14,6 +14,25 @@ width | height
       | calc() | min() | max() | clamp()
       | "auto"
 
+margin
+    ::= box-value (WHITESPACE box-value){0,3}
+
+padding
+    ::= length-percentage (WHITESPACE length-percentage){0,3}
+
+box-value
+    ::= DIMENSION | PERCENTAGE | NUMBER "0" | "auto"
+
+length-percentage
+    ::= DIMENSION | PERCENTAGE | NUMBER "0"
+
+font-size
+    ::= DIMENSION | PERCENTAGE | NUMBER "0"
+      | calc() | min() | max() | clamp()
+      | "xx-small" | "x-small" | "small" | "medium"
+      | "large" | "x-large" | "xx-large" | "xxx-large"
+      | "smaller" | "larger"
+
 opacity
     ::= NUMBER
       | PERCENTAGE

@@ -140,6 +140,12 @@ pub struct EvaluationError {
     pub reason:             EvaluationErrorReason,
 }
 
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct EvaluationContext {
+    pub percentage_basis:           Option<f64>,
+}
+
 pub fn parse_value_list(source: &str, values: &[ComponentValue]) -> Result<Value, ValueParseError> {
     let mut items = Vec::new();
     let mut separator = None;
@@ -332,6 +338,10 @@ pub struct ValueParseError {
 pub enum PropertyGrammar {
     Color,
     LengthPercentageOrAuto,
+    LengthPercentage,
+    Margin,
+    Padding,
+    FontSize,
     Opacity,
     Display,
 }
@@ -348,6 +358,9 @@ impl Default for PropertyGrammarRegistry {
                 ("color", PropertyGrammar::Color),
                 ("width", PropertyGrammar::LengthPercentageOrAuto),
                 ("height", PropertyGrammar::LengthPercentageOrAuto),
+                ("margin", PropertyGrammar::Margin),
+                ("padding", PropertyGrammar::Padding),
+                ("font-size", PropertyGrammar::FontSize),
                 ("opacity", PropertyGrammar::Opacity),
                 ("display", PropertyGrammar::Display),
             ],
@@ -428,6 +441,28 @@ fn grammar_accepts(source: &str, grammar: PropertyGrammar, value: &Value) -> boo
             Value::Function(function) => is_math_function_name(source, function),
             _ => false,
         },
+        PropertyGrammar::LengthPercentage => is_length_percentage_value(source, value, false),
+        PropertyGrammar::Margin => is_box_shorthand(source, value, true),
+        PropertyGrammar::Padding => is_box_shorthand(source, value, false),
+        PropertyGrammar::FontSize => match value {
+            value if is_length_percentage_value(source, value, false) => true,
+            Value::Keyword(token) => source_token_text(source, token).is_some_and(|name| {
+                matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "xx-small"
+                        | "x-small"
+                        | "small"
+                        | "medium"
+                        | "large"
+                        | "x-large"
+                        | "xx-large"
+                        | "xxx-large"
+                        | "smaller"
+                        | "larger"
+                )
+            }),
+            _ => false,
+        },
         PropertyGrammar::Opacity => match value {
             Value::Number(NumericLiteral { unit: None, .. }) => true,
             Value::Number(NumericLiteral {
@@ -453,6 +488,29 @@ fn grammar_accepts(source: &str, grammar: PropertyGrammar, value: &Value) -> boo
             }),
             _ => false,
         },
+    }
+}
+
+fn is_length_percentage_value(source: &str, value: &Value, allow_auto: bool) -> bool {
+    match value {
+        Value::Number(NumericLiteral {
+            value, unit: None, ..
+        }) => *value == 0.0,
+        Value::Number(NumericLiteral { unit: Some(_), .. }) => true,
+        Value::Keyword(token) if allow_auto => {
+            source_token_text(source, token).is_some_and(|name| name.eq_ignore_ascii_case("auto"))
+        }
+        Value::Function(function) => is_math_function_name(source, function),
+        _ => false,
+    }
+}
+
+fn is_box_shorthand(source: &str, value: &Value, allow_auto: bool) -> bool {
+    match value {
+        Value::List { items, .. } if (1..=4).contains(&items.len()) => items
+            .iter()
+            .all(|item| is_length_percentage_value(source, item, allow_auto)),
+        _ => is_length_percentage_value(source, value, allow_auto),
     }
 }
 
@@ -552,22 +610,35 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
 }
 
 pub fn evaluate_expression(expression: &Expr) -> EvaluationResult<NumericLiteral> {
+    evaluate_expression_with_context(expression, &EvaluationContext::default())
+}
+
+pub fn evaluate_expression_with_context(
+    expression: &Expr,
+    context: &EvaluationContext,
+) -> EvaluationResult<NumericLiteral> {
     match expression {
+        Expr::Literal(literal) if literal.unit.as_deref() == Some("%") => {
+            let Some(basis) = context.percentage_basis else {
+                return EvaluationResult::Deferred(expression.clone());
+            };
+            numeric_result(literal.value * basis / 100.0, None, literal.span)
+        }
         Expr::Literal(literal) => EvaluationResult::Resolved(literal.clone()),
-        Expr::Group(expression) => match evaluate_expression(expression) {
+        Expr::Group(expression) => match evaluate_expression_with_context(expression, context) {
             EvaluationResult::Resolved(value) => EvaluationResult::Resolved(value),
             EvaluationResult::Deferred(_) => {
                 EvaluationResult::Deferred(expression.as_ref().clone())
             }
             EvaluationResult::Invalid(error) => EvaluationResult::Invalid(error),
         },
-        Expr::Add(left, right) => evaluate_additive(expression, left, right, false),
-        Expr::Subtract(left, right) => evaluate_additive(expression, left, right, true),
-        Expr::Multiply(left, right) => evaluate_multiplication(expression, left, right),
-        Expr::Divide(left, right) => evaluate_division(expression, left, right),
-        Expr::Min(arguments) => evaluate_min_max(expression, arguments, false),
-        Expr::Max(arguments) => evaluate_min_max(expression, arguments, true),
-        Expr::Clamp { min, value, max } => evaluate_clamp(expression, min, value, max),
+        Expr::Add(left, right) => evaluate_additive(expression, left, right, false, context),
+        Expr::Subtract(left, right) => evaluate_additive(expression, left, right, true, context),
+        Expr::Multiply(left, right) => evaluate_multiplication(expression, left, right, context),
+        Expr::Divide(left, right) => evaluate_division(expression, left, right, context),
+        Expr::Min(arguments) => evaluate_min_max(expression, arguments, false, context),
+        Expr::Max(arguments) => evaluate_min_max(expression, arguments, true, context),
+        Expr::Clamp { min, value, max } => evaluate_clamp(expression, min, value, max, context),
     }
 }
 
@@ -576,10 +647,12 @@ fn evaluate_additive(
     left: &Expr,
     right: &Expr,
     subtract: bool,
+    context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
-    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) =
-        (evaluate_expression(left), evaluate_expression(right))
-    else {
+    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) = (
+        evaluate_expression_with_context(left, context),
+        evaluate_expression_with_context(right, context),
+    ) else {
         return EvaluationResult::Deferred(expression.clone());
     };
     if left.unit != right.unit
@@ -600,10 +673,12 @@ fn evaluate_multiplication(
     expression: &Expr,
     left: &Expr,
     right: &Expr,
+    context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
-    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) =
-        (evaluate_expression(left), evaluate_expression(right))
-    else {
+    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) = (
+        evaluate_expression_with_context(left, context),
+        evaluate_expression_with_context(right, context),
+    ) else {
         return EvaluationResult::Deferred(expression.clone());
     };
     if is_context_dependent(&left.unit) || is_context_dependent(&right.unit) {
@@ -622,10 +697,12 @@ fn evaluate_division(
     expression: &Expr,
     left: &Expr,
     right: &Expr,
+    context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
-    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) =
-        (evaluate_expression(left), evaluate_expression(right))
-    else {
+    let (EvaluationResult::Resolved(left), EvaluationResult::Resolved(right)) = (
+        evaluate_expression_with_context(left, context),
+        evaluate_expression_with_context(right, context),
+    ) else {
         return EvaluationResult::Deferred(expression.clone());
     };
     if right.value == 0.0 {
@@ -648,10 +725,12 @@ fn evaluate_min_max(
     expression: &Expr,
     arguments: &[Expr],
     maximum: bool,
+    context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
     let mut values = Vec::with_capacity(arguments.len());
     for argument in arguments {
-        let EvaluationResult::Resolved(value) = evaluate_expression(argument) else {
+        let EvaluationResult::Resolved(value) = evaluate_expression_with_context(argument, context)
+        else {
             return EvaluationResult::Deferred(expression.clone());
         };
         values.push(value);
@@ -688,14 +767,15 @@ fn evaluate_clamp(
     min: &Expr,
     value: &Expr,
     max: &Expr,
+    context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
-    let EvaluationResult::Resolved(min) = evaluate_expression(min) else {
+    let EvaluationResult::Resolved(min) = evaluate_expression_with_context(min, context) else {
         return EvaluationResult::Deferred(expression.clone());
     };
-    let EvaluationResult::Resolved(value) = evaluate_expression(value) else {
+    let EvaluationResult::Resolved(value) = evaluate_expression_with_context(value, context) else {
         return EvaluationResult::Deferred(expression.clone());
     };
-    let EvaluationResult::Resolved(max) = evaluate_expression(max) else {
+    let EvaluationResult::Resolved(max) = evaluate_expression_with_context(max, context) else {
         return EvaluationResult::Deferred(expression.clone());
     };
     if min.unit != value.unit
@@ -1396,6 +1476,24 @@ mod tests {
     }
 
     #[test]
+    fn resolves_percentages_with_an_explicit_basis() {
+        let source = ".a{width:calc(10% + 5%);} ";
+        let function = calc_function(source);
+        let expression = parse_calc_expression(source, &function).unwrap();
+        let context = EvaluationContext {
+            percentage_basis: Some(200.0),
+        };
+
+        let EvaluationResult::Resolved(value) =
+            evaluate_expression_with_context(&expression, &context)
+        else {
+            panic!("expected percentage resolution");
+        };
+        assert_eq!(value.value, 30.0);
+        assert_eq!(value.unit, None);
+    }
+
+    #[test]
     fn reports_division_by_zero() {
         let source = ".a{width:calc(10px / 0);} ";
         let function = calc_function(source);
@@ -1515,6 +1613,9 @@ mod tests {
             ".a{color:red;} ",
             ".a{width:0;} ",
             ".a{height:50%;} ",
+            ".a{margin:1em auto 2em;} ",
+            ".a{padding:0 2rem 1rem 3rem;} ",
+            ".a{font-size:large;} ",
             ".a{opacity:0.5;} ",
             ".a{display:flex;} ",
         ];
@@ -1529,6 +1630,9 @@ mod tests {
         let invalid = [
             ".a{color:12px;} ",
             ".a{width:red;} ",
+            ".a{margin:auto auto auto auto auto;} ",
+            ".a{padding:auto;} ",
+            ".a{font-size:banana;} ",
             ".a{opacity:2px;} ",
             ".a{display:banana;} ",
         ];
