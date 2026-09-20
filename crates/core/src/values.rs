@@ -382,6 +382,7 @@ impl Default for PropertyGrammarRegistry {
         Self {
             entries: vec![
                 ("color", PropertyGrammar::Color),
+                ("background-color", PropertyGrammar::Color),
                 ("width", PropertyGrammar::LengthPercentageOrAuto),
                 ("height", PropertyGrammar::LengthPercentageOrAuto),
                 ("margin", PropertyGrammar::Margin),

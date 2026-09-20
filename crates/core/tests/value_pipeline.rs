@@ -111,6 +111,23 @@ fn reports_property_errors_without_rejecting_unknown_properties() {
 }
 
 #[test]
+fn validates_background_color_with_the_color_grammar() {
+    let registry = PropertyGrammarRegistry::default();
+    for (source, expected) in [
+        (".a{background-color:#0f08;} ", true),
+        (".a{background-color:12px;} ", false),
+    ] {
+        let parsed = declarations(source);
+        let background = declaration(source, &parsed, "background-color");
+        assert_eq!(
+            analyze_declaration(source, background, &registry).is_ok(),
+            expected,
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn preserves_deferred_values_until_context_is_available() {
     let source = ".a{width:calc(10% + 5%);} ";
     let parsed = declarations(source);

@@ -7,6 +7,9 @@ layer. Unknown properties and custom properties remain permissive.
 color
     ::= color-value
 
+background-color
+    ::= color-value
+
 width | height
     ::= NUMBER "0"
       | DIMENSION
