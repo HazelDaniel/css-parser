@@ -3,11 +3,52 @@ use crate::parser::{Declaration, Function, SimpleBlock, TokenData};
 use crate::token::TokenKind;
 use crate::types::LexerSpan;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub trait VariableResolver {
     /// Looks up a custom-property value in the caller-provided environment.
     fn resolve(&self, name: &str) -> Option<&[ComponentValue]>;
+}
+
+/// A caller-managed custom-property environment for one inheritance context.
+///
+/// A child starts with an inherited snapshot of its parent's custom
+/// properties. A locally selected declaration replaces the inherited value.
+/// Cascade selection and inheritance decisions remain the caller's job.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CustomPropertyEnvironment {
+    parent: Option<Box<CustomPropertyEnvironment>>,
+    local: HashMap<String, Vec<ComponentValue>>,
+}
+
+impl CustomPropertyEnvironment {
+    pub fn new() -> Self {
+        Self {
+            parent: None,
+            local: HashMap::new(),
+        }
+    }
+
+    pub fn child_of(parent: &Self) -> Self {
+        Self {
+            parent: Some(Box::new(parent.clone())),
+            local: HashMap::new(),
+        }
+    }
+
+    pub fn set(&mut self, name: impl Into<String>, values: Vec<ComponentValue>) {
+        self.local.insert(name.into(), values);
+    }
+}
+
+impl VariableResolver for CustomPropertyEnvironment {
+    fn resolve(&self, name: &str) -> Option<&[ComponentValue]> {
+        self.local.get(name).map(Vec::as_slice).or_else(|| {
+            self.parent
+                .as_deref()
+                .and_then(|parent| parent.resolve(name))
+        })
+    }
 }
 
 #[rustfmt::skip]
@@ -453,6 +494,55 @@ mod tests {
                 reason: VariableResolutionErrorReason::INVALID_NAME,
                 ..
             }]
+        ));
+    }
+
+    #[test]
+    fn local_custom_property_shadows_inherited_value() {
+        let source = ".x{width:var(--gap)}";
+        let values = value_of(source);
+        let outer_source = ".x{--gap:4px}";
+        let inner_source = ".x{--gap:8px}";
+        let outer = declarations(outer_source)
+            .into_iter()
+            .next()
+            .expect("outer declaration");
+        let inner = declarations(inner_source)
+            .into_iter()
+            .next()
+            .expect("inner declaration");
+        let mut parent = CustomPropertyEnvironment::new();
+        parent.set("--gap", outer.value);
+        let mut resolver = CustomPropertyEnvironment::child_of(&parent);
+        resolver.set("--gap", inner.value);
+
+        let ResolutionResult::Resolved(values) = resolve_variables(source, &values, &resolver)
+        else {
+            panic!("expected scoped resolution to succeed");
+        };
+        let [ComponentValue::PRESERVED(TokenData { kind, .. })] = values.as_slice() else {
+            panic!("expected one resolved token");
+        };
+        assert_eq!(*kind, TokenKind::DIMENSION);
+        assert!(resolver.resolve("--gap").is_some());
+    }
+
+    #[test]
+    fn inherited_custom_property_is_used_when_not_locally_overridden() {
+        let source = ".x{width:var(--gap)}";
+        let values = value_of(source);
+        let outer_source = ".x{--gap:4px}";
+        let outer = declarations(outer_source)
+            .into_iter()
+            .next()
+            .expect("outer declaration");
+        let mut parent = CustomPropertyEnvironment::new();
+        parent.set("--gap", outer.value);
+        let resolver = CustomPropertyEnvironment::child_of(&parent);
+
+        assert!(matches!(
+            resolve_variables(source, &values, &resolver),
+            ResolutionResult::Resolved(_)
         ));
     }
 }
