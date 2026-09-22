@@ -87,14 +87,19 @@ fn runs_resolution_parsing_analysis_and_evaluation_pipeline() {
     let expression = parse_calc_expression(source, &function).unwrap();
     assert_eq!(
         analyze_expression(&expression),
-        Ok(NumericType::Dimension("length".into()))
+        Ok(NumericType::Dimension(
+            css_parser_core::values::UnitCategory::Length,
+        ))
     );
 
     let EvaluationResult::Resolved(value) = evaluate_expression(&expression) else {
         panic!("expected constant expression to fold");
     };
     assert_eq!(value.value, 16.0);
-    assert_eq!(value.unit.as_deref(), Some("px"));
+    assert_eq!(
+        value.unit,
+        Some(css_parser_core::values::Unit::AbsoluteLength("px".into()))
+    );
 }
 
 #[test]

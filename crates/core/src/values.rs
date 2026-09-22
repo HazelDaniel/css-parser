@@ -25,6 +25,95 @@ pub enum Color {
 }
 
 #[rustfmt::skip]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unit {
+    Percentage,
+    AbsoluteLength(String),
+    RelativeLength(String),
+    Angle(String),
+    Time(String),
+    Frequency(String),
+    Resolution(String),
+    Flex(String),
+    Unknown(String),
+}
+
+#[rustfmt::skip]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitCategory {
+    Length,
+    Angle,
+    Time,
+    Frequency,
+    Resolution,
+    Flex,
+    Unknown,
+}
+
+impl Unit {
+    fn parse(name: &str) -> Self {
+        let name = name.to_ascii_lowercase();
+        if name == "%" {
+            return Self::Percentage;
+        }
+        if matches!(name.as_str(), "cm" | "mm" | "q" | "in" | "pc" | "pt" | "px") {
+            Self::AbsoluteLength(name)
+        } else if matches!(
+            name.as_str(),
+            "em" | "ex"
+                | "ch"
+                | "rem"
+                | "lh"
+                | "rlh"
+                | "vw"
+                | "vh"
+                | "vmin"
+                | "vmax"
+                | "svw"
+                | "svh"
+                | "lvw"
+                | "lvh"
+                | "dvw"
+                | "dvh"
+                | "ic"
+                | "cap"
+        ) {
+            Self::RelativeLength(name)
+        } else if matches!(name.as_str(), "deg" | "grad" | "rad" | "turn") {
+            Self::Angle(name)
+        } else if matches!(name.as_str(), "ms" | "s") {
+            Self::Time(name)
+        } else if matches!(name.as_str(), "hz" | "khz") {
+            Self::Frequency(name)
+        } else if matches!(name.as_str(), "dpi" | "dpcm" | "dppx" | "x") {
+            Self::Resolution(name)
+        } else if name == "fr" {
+            Self::Flex(name)
+        } else {
+            Self::Unknown(name)
+        }
+    }
+
+    fn category(&self) -> UnitCategory {
+        match self {
+            Self::Percentage | Self::AbsoluteLength(_) | Self::RelativeLength(_) => {
+                UnitCategory::Length
+            }
+            Self::Angle(_) => UnitCategory::Angle,
+            Self::Time(_) => UnitCategory::Time,
+            Self::Frequency(_) => UnitCategory::Frequency,
+            Self::Resolution(_) => UnitCategory::Resolution,
+            Self::Flex(_) => UnitCategory::Flex,
+            Self::Unknown(_) => UnitCategory::Unknown,
+        }
+    }
+
+    fn is_context_dependent(&self) -> bool {
+        matches!(self, Self::Percentage | Self::RelativeLength(_))
+    }
+}
+
+#[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Number(NumericLiteral),
@@ -63,14 +152,14 @@ pub enum Expr {
 pub enum NumericType {
     Number,
     Percentage,
-    Dimension(String),
+    Dimension(UnitCategory),
 }
 
 #[rustfmt::skip]
 #[derive(Debug, Clone, PartialEq)]
 pub struct NumericLiteral {
     pub value:        f64,
-    pub unit:         Option<String>,
+    pub unit:         Option<Unit>,
     pub span:         LexerSpan,
     pub line:         usize,
 }
@@ -309,7 +398,7 @@ fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValuePa
         TokenKind::NUMBER => (text, None),
         TokenKind::PERCENTAGE => (
             text.strip_suffix('%').unwrap_or(text),
-            Some("%".to_string()),
+            Some(Unit::Percentage),
         ),
         TokenKind::DIMENSION => {
             let index = number_end(text).ok_or(ValueParseError {
@@ -317,7 +406,7 @@ fn parse_numeric_value(source: &str, token: &TokenData) -> Result<Value, ValuePa
                 span: token.span,
                 line: token.line,
             })?;
-            (&text[..index], Some(text[index..].to_string()))
+            (&text[..index], Some(Unit::parse(&text[index..])))
         }
         _ => unreachable!("parse_numeric_value called for a non-numeric token"),
     };
@@ -490,13 +579,14 @@ fn grammar_accepts(source: &str, grammar: PropertyGrammar, value: &Value) -> boo
             }),
             _ => false,
         },
-        PropertyGrammar::Opacity => match value {
-            Value::Number(NumericLiteral { unit: None, .. }) => true,
-            Value::Number(NumericLiteral {
-                unit: Some(unit), ..
-            }) => unit == "%",
-            _ => false,
-        },
+        PropertyGrammar::Opacity => matches!(
+            value,
+            Value::Number(NumericLiteral { unit: None, .. })
+                | Value::Number(NumericLiteral {
+                    unit: Some(Unit::Percentage),
+                    ..
+                })
+        ),
         PropertyGrammar::Display => match value {
             Value::Keyword(token) => source_token_text(source, token).is_some_and(|name| {
                 matches!(
@@ -594,8 +684,8 @@ pub fn analyze_expression(expression: &Expr) -> Result<NumericType, SemanticErro
     match expression {
         Expr::Literal(literal) => Ok(match &literal.unit {
             None => NumericType::Number,
-            Some(unit) if unit == "%" => NumericType::Percentage,
-            Some(unit) => NumericType::Dimension(dimension_category(unit)),
+            Some(Unit::Percentage) => NumericType::Percentage,
+            Some(unit) => NumericType::Dimension(unit.category()),
         }),
         Expr::Group(expression) => analyze_expression(expression),
         Expr::Add(left, right) | Expr::Subtract(left, right) => {
@@ -671,16 +761,16 @@ fn evaluate_literal(
     expression: &Expr,
     context: &EvaluationContext,
 ) -> EvaluationResult<NumericLiteral> {
-    let Some(unit) = literal.unit.as_deref() else {
+    let Some(unit) = literal.unit.as_ref() else {
         return EvaluationResult::Resolved(literal.clone());
     };
-    let basis = if unit == "%" {
+    let basis = if matches!(unit, Unit::Percentage) {
         context
             .percentage_basis
             .map(|basis| literal.value * basis / 100.0)
-    } else if unit.eq_ignore_ascii_case("em") {
+    } else if matches!(unit, Unit::RelativeLength(name) if name == "em") {
         context.font_size.map(|basis| literal.value * basis)
-    } else if unit.eq_ignore_ascii_case("rem") {
+    } else if matches!(unit, Unit::RelativeLength(name) if name == "rem") {
         context.root_font_size.map(|basis| literal.value * basis)
     } else {
         return EvaluationResult::Resolved(literal.clone());
@@ -851,7 +941,7 @@ fn evaluate_clamp(
 
 fn numeric_result(
     value: f64,
-    unit: Option<String>,
+    unit: Option<Unit>,
     span: LexerSpan,
     line: usize,
 ) -> EvaluationResult<NumericLiteral> {
@@ -871,31 +961,8 @@ fn numeric_result(
     }
 }
 
-fn is_context_dependent(unit: &Option<String>) -> bool {
-    let Some(unit) = unit.as_deref() else {
-        return false;
-    };
-    matches!(
-        unit.to_ascii_lowercase().as_str(),
-        "%" | "cap"
-            | "ch"
-            | "em"
-            | "ex"
-            | "ic"
-            | "lh"
-            | "rem"
-            | "rlh"
-            | "vh"
-            | "vmax"
-            | "vmin"
-            | "vw"
-            | "dvh"
-            | "dvw"
-            | "lvh"
-            | "lvw"
-            | "svh"
-            | "svw"
-    )
+fn is_context_dependent(unit: &Option<Unit>) -> bool {
+    unit.as_ref().is_some_and(Unit::is_context_dependent)
 }
 
 fn analyze_same_type<'a>(
@@ -1134,12 +1201,15 @@ impl ExpressionParser<'_> {
 
         let (number_text, unit) = match token.kind {
             TokenKind::NUMBER => (text, None),
-            TokenKind::PERCENTAGE => (text.strip_suffix('%').unwrap_or(text), Some("%")),
+            TokenKind::PERCENTAGE => (
+                text.strip_suffix('%').unwrap_or(text),
+                Some(Unit::Percentage),
+            ),
             TokenKind::DIMENSION => {
                 let index = number_end(text).ok_or_else(|| {
                     self.error(ExpressionErrorReason::INVALID_NUMBER, Some(token))
                 })?;
-                (&text[..index], Some(&text[index..]))
+                (&text[..index], Some(Unit::parse(&text[index..])))
             }
             _ => unreachable!("numeric_literal called for a non-numeric token"),
         };
@@ -1149,7 +1219,7 @@ impl ExpressionParser<'_> {
 
         Ok(NumericLiteral {
             value,
-            unit: unit.map(str::to_string),
+            unit,
             span: token.span,
             line: token.line,
         })
@@ -1280,53 +1350,6 @@ fn is_empty_argument(values: &[ComponentValue]) -> bool {
     })
 }
 
-fn dimension_category(unit: &str) -> String {
-    let unit = unit.to_ascii_lowercase();
-    let category = if matches!(
-        unit.as_str(),
-        "cap"
-            | "ch"
-            | "cm"
-            | "em"
-            | "ex"
-            | "ic"
-            | "in"
-            | "lh"
-            | "mm"
-            | "pc"
-            | "pt"
-            | "px"
-            | "q"
-            | "rem"
-            | "rlh"
-            | "vh"
-            | "vmax"
-            | "vmin"
-            | "vw"
-            | "dvh"
-            | "dvw"
-            | "lvh"
-            | "lvw"
-            | "svh"
-            | "svw"
-    ) {
-        "length"
-    } else if matches!(unit.as_str(), "deg" | "grad" | "rad" | "turn") {
-        "angle"
-    } else if matches!(unit.as_str(), "ms" | "s") {
-        "time"
-    } else if matches!(unit.as_str(), "hz" | "khz") {
-        "frequency"
-    } else if matches!(unit.as_str(), "dpi" | "dpcm" | "dppx" | "x") {
-        "resolution"
-    } else if unit == "fr" {
-        "flex"
-    } else {
-        return format!("unit:{unit}");
-    };
-    category.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1426,9 +1449,9 @@ mod tests {
         };
 
         assert_eq!(left.value, 1.5);
-        assert_eq!(left.unit.as_deref(), Some("rem"));
+        assert_eq!(left.unit, Some(Unit::RelativeLength("rem".to_string())));
         assert_eq!(right.value, 20.0);
-        assert_eq!(right.unit.as_deref(), Some("%"));
+        assert_eq!(right.unit, Some(Unit::Percentage));
         assert_eq!(&source[left.span.0..=left.span.1], "1.5rem");
         assert_eq!(&source[right.span.0..=right.span.1], "20%");
     }
@@ -1441,7 +1464,7 @@ mod tests {
 
         assert_eq!(
             analyze_expression(&expression),
-            Ok(NumericType::Dimension("length".to_string()))
+            Ok(NumericType::Dimension(UnitCategory::Length))
         );
     }
 
@@ -1453,7 +1476,7 @@ mod tests {
 
         assert_eq!(
             analyze_expression(&expression),
-            Ok(NumericType::Dimension("length".to_string()))
+            Ok(NumericType::Dimension(UnitCategory::Length))
         );
     }
 
@@ -1562,7 +1585,7 @@ mod tests {
             panic!("expected a folded value");
         };
         assert_eq!(value.value, 15.0);
-        assert_eq!(value.unit.as_deref(), Some("px"));
+        assert_eq!(value.unit, Some(Unit::AbsoluteLength("px".to_string())));
     }
 
     #[test]
@@ -1676,8 +1699,12 @@ mod tests {
             let declaration = first_declaration(source);
             let value = parse_value_list(source, &declaration.value).unwrap();
             let actual = match value {
-                Value::Number(number) if number.unit.as_deref() == Some("px") => "dimension",
-                Value::Number(number) if number.unit.as_deref() == Some("%") => "percentage",
+                Value::Number(number)
+                    if number.unit == Some(Unit::AbsoluteLength("px".to_string())) =>
+                {
+                    "dimension"
+                }
+                Value::Number(number) if number.unit == Some(Unit::Percentage) => "percentage",
                 Value::Number(_) => "number",
                 Value::String(_) => "string",
                 Value::Keyword(_) => "keyword",
@@ -1859,7 +1886,7 @@ mod tests {
             panic!("expected right literal");
         };
         assert_eq!(left.value, 8.0);
-        assert_eq!(left.unit.as_deref(), Some("px"));
+        assert_eq!(left.unit, Some(Unit::AbsoluteLength("px".to_string())));
         assert_eq!(right.value, 2.0);
     }
 
@@ -1901,6 +1928,6 @@ mod tests {
             panic!("expected fallback literal");
         };
         assert_eq!(left.value, 4.0);
-        assert_eq!(left.unit.as_deref(), Some("px"));
+        assert_eq!(left.unit, Some(Unit::AbsoluteLength("px".to_string())));
     }
 }
